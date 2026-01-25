@@ -1,22 +1,13 @@
 import numpy as np
-import casadi as ca
 
-from typing import Dict, Any, Generator, Optional, List, Tuple
-
-try:
-    from acados_template import AcadosOcpSolver
-except Exception:
-    raise ImportError(
-        "StabilityVerifier requires `acados_template` (acados Python interface). "
-        "Install it and ensure it is importable."
-    )
-
+from typing import Generator, Optional, List
+from acados_template import AcadosOcpSolver
 
 from .reports import *
 from .gruene import grune_required_horizon_and_alpha
 from ..extractor import MPCConfigExtractor, LinearSystemExtractor
 from ..mpc_data import MPCData, MPCDataset
-from ...utils.package_logger import PackageLogger
+from ..package_logger import PackageLogger
 
 
 __logger__ = PackageLogger.get_logger(__name__)

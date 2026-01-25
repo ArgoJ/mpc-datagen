@@ -4,10 +4,10 @@ from acados_template import AcadosOcpSolver
 from tqdm import tqdm
 from dataclasses import replace
 
-from .extractor import MPCConfigExtractor
 from .mpc_solve import solve_mpc_closed_loop
-from .mpc_data import MPCDataset, MPCConfig
-from ..utils.package_logger import PackageLogger, DEFAULT_MODULE_NAME
+from ..extractor import MPCConfigExtractor
+from ..mpc_data import MPCDataset
+from ..package_logger import PackageLogger, DEFAULT_MODULE_NAME
 
 class MPCDataGenerator:
     """

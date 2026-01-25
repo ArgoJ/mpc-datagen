@@ -3,20 +3,13 @@ from __future__ import annotations
 import numpy as np
 
 from typing import Optional, Tuple
-
-try:
-    from acados_template import AcadosOcpSolver
-except Exception:
-    raise ImportError(
-        "StabilityVerifier requires `acados_template` (acados Python interface). "
-        "Install it and ensure it is importable."
-    )
+from acados_template import AcadosOcpSolver
 
 from .reports import TerminalIngredientsReport, GruneNoTerminalCertificateReport
 from .gruene import grune_required_horizon_and_alpha
 from .reports import StabilityReport
 from ..extractor import MPCConfigExtractor, LinearSystemExtractor
-from ...utils.linalg import as_mat, as_vec, sym
+from ..linalg import as_mat, as_vec, sym
 
 
 

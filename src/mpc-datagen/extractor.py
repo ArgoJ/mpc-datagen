@@ -1,11 +1,9 @@
 import numpy as np
-import casadi as ca
 
 from typing import Any, Literal, Optional, Tuple
-from dataclasses import dataclass, field, fields
 
 from .mpc_data import MPCConfig, LinearSystem
-from ..utils.linalg import discretize_and_linearize_rk4
+from .linalg import discretize_and_linearize_rk4
 
 try:
     from acados_template import AcadosOcpSolver

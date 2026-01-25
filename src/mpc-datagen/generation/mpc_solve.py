@@ -1,11 +1,11 @@
 import time
 import logging
-from typing import Dict, Optional, Any
+from typing import Optional
 import numpy as np
 from acados_template import AcadosOcpSolver, AcadosSimSolver
 
-from .mpc_data import MPCData, MPCTrajectory, MPCMeta, MPCConfig
-from .extractor import MPCConfigExtractor
+from ..mpc_data import MPCData, MPCTrajectory, MPCMeta, MPCConfig
+from ..extractor import MPCConfigExtractor
 
 __logger__ = logging.getLogger(__name__)
 
@@ -14,6 +14,7 @@ def solve_mpc_closed_loop(
     solver: AcadosOcpSolver,
     integrator: Optional[AcadosSimSolver] = None,
     cfg: Optional[MPCConfig] = None,
+    T_sim: Optional[int] = None,
     break_on_infeasible: bool = True
 ) -> MPCData:
     """
@@ -27,6 +28,8 @@ def solve_mpc_closed_loop(
         Acados integrator for accurate simulation steps.
     cfg : MPCConfig, optional
         Configuration dictionary to store in MPCData.
+    T_sim : int, optional
+        Number of simulation steps. If None, uses cfg.T_sim.
     break_on_infeasible : bool
         If True, stops simulation if the solver returns a non-zero status.
 
@@ -35,10 +38,16 @@ def solve_mpc_closed_loop(
     MPCData
         The collected data from the closed-loop run.
     """
-    
-    # Initialize Trajectory container with NaNs
+    if cfg is None and T_sim is None:
+        raise ValueError("Either cfg or T_sim must be provided.")
+        
     if cfg is None:
         cfg = MPCConfigExtractor.get_cfg(solver)
+        
+    if T_sim is not None:
+        cfg.T_sim = T_sim
+        
+    # Initialize Trajectory container with NaNs
     traj = MPCTrajectory.init(T_sim=cfg.T_sim, N=cfg.N, nx=cfg.nx, nu=cfg.nu, dt=cfg.dt)
     
     # Set initial state

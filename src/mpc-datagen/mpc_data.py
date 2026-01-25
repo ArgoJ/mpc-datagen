@@ -7,7 +7,7 @@ from dataclasses import dataclass, field, asdict
 from typing import List, Optional, Iterator
 from pathlib import Path
 
-from ..utils.package_logger import PackageLogger
+from .package_logger import PackageLogger
 
 __logger__ = PackageLogger.get_logger(__name__)
 
