@@ -1,8 +1,16 @@
+import sys
 import unittest
+from pathlib import Path
 
 import numpy as np
 
-from lyapunov_certified_imitation_learning.data_generation.verification.certification import (
+
+# Ensure we can import from ./src without installing the package.
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+sys.path.insert(0, str(SRC))
+
+from mpc_datagen.verification.certification import (
     certify_linear_mpc_grune_no_terminal,
 )
 

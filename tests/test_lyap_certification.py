@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
-from lyapunov_certified_imitation_learning.data_generation.verification.certification import (  # noqa: E402
+from mpc_datagen.verification.certification import (  # noqa: E402
     certify_linear_mpc_terminal_ingredients,
 )
 

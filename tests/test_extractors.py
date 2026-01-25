@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
-from lyapunov_certified_imitation_learning.data_generation.extractor import (
+from mpc_datagen.extractor import (
     LinearSystemExtractor, 
     MPCConfigExtractor
 )

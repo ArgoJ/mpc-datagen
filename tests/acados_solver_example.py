@@ -1,11 +1,17 @@
 # %% General Imports
 import numpy as np
+import sys
+from pathlib import Path
 from scipy.linalg import solve_discrete_are, block_diag
 from casadi import SX
 from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
 from typing import Optional, Tuple
 
-import lyapunov_certified_imitation_learning.utils as lcil_utils
+
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+sys.path.insert(0, str(SRC))
+from mpc_datagen.linalg import lin_c2d_rk4
 
 
 
@@ -95,7 +101,7 @@ def get_ocp_solver(
     ocp.model = get_model(A_c, B_c)
 
     # Calculate DARE
-    A_d, B_d = lcil_utils.linalg.lin_c2d_rk4(A_c, B_c, dt, num_steps=1)
+    A_d, B_d = lin_c2d_rk4(A_c, B_c, dt, num_steps=1)
 
     if P is None and terminal_mode == "regional":
         P = solve_discrete_are(A_d, B_d, Q, R)
