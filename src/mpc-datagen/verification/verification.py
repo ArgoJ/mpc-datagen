@@ -142,7 +142,7 @@ class StabilityVerifier:
             )
             return False
 
-        if self.traj.solved_states is None or self.traj.solved_inputs is None:
+        if self.traj.predicted_states is None or self.traj.predicted_inputs is None:
             __logger__.warning(
                 f"Entry ID {getattr(self.meta, 'id', 'unknown')} missing OCP predictions (solved_states/solved_inputs); "
                 "using stored cost for verification."
@@ -157,7 +157,7 @@ class StabilityVerifier:
     def _audit_value_function(self, max_steps: int = 3, rtol: float = 1e-3, atol: float = 1e-6) -> None:
         """Compare stored traj.cost with recomputed V_N from OCP predictions."""
         self._require_bound_entry()
-        if self.traj.solved_states is None or self.traj.solved_inputs is None:
+        if self.traj.predicted_states is None or self.traj.predicted_inputs is None:
             return
 
         T_sim = min(self.cfg.T_sim, int(self.traj.cost.shape[0]))
@@ -235,11 +235,11 @@ class StabilityVerifier:
     def _V_from_predictions(self, step_index: int) -> float:
         """Recompute V_N(x) from stored OCP predictions at a simulation step."""
         self._require_bound_entry()
-        if self.traj.solved_states is None or self.traj.solved_inputs is None:
+        if self.traj.predicted_states is None or self.traj.predicted_inputs is None:
             raise ValueError("Missing OCP predictions for V_N recomputation.")
 
-        x_pred = np.asarray(self.traj.solved_states[step_index], dtype=float)
-        u_pred = np.asarray(self.traj.solved_inputs[step_index], dtype=float)
+        x_pred = np.asarray(self.traj.predicted_states[step_index], dtype=float)
+        u_pred = np.asarray(self.traj.predicted_inputs[step_index], dtype=float)
         if x_pred.shape[0] - 1 != u_pred.shape[0]:
             raise ValueError("Predicted trajectory shapes do not match horizon.")
 

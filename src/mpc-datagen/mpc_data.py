@@ -104,8 +104,8 @@ class MPCTrajectory:
     inputs: np.ndarray          # (T, nu)
     time: np.ndarray            # (T,)
     cost: np.ndarray            # (T,)
-    solved_states: Optional[np.ndarray] = None   # (T, N+1, nx) - OCP predictions at each step
-    solved_inputs: Optional[np.ndarray] = None   # (T, N, nu)   - OCP predictions at each step
+    predicted_states: Optional[np.ndarray] = None   # (T, N+1, nx) - OCP predictions at each step
+    predicted_inputs: Optional[np.ndarray] = None   # (T, N, nu)   - OCP predictions at each step
     feasible: bool = True
     
     @property
@@ -116,8 +116,8 @@ class MPCTrajectory:
     @property
     def horizon(self) -> Optional[int]:
         """Get the prediction horizon length (if available)."""
-        if self.solved_states is not None:
-            return self.solved_states.shape[1] - 1
+        if self.predicted_states is not None:
+            return self.predicted_states.shape[1] - 1
         return None
 
     @classmethod
@@ -128,13 +128,24 @@ class MPCTrajectory:
             inputs=grp["inputs"][:, :],
             time=grp["time"][:],
             cost=grp["cost"][:],
-            solved_states=grp["solved_states"][:, :, :] if "solved_states" in grp else None,
-            solved_inputs=grp["solved_inputs"][:, :, :] if "solved_inputs" in grp else None,
+            predicted_states=grp["predicted_states"][:, :, :] if "predicted_states" in grp else None,
+            predicted_inputs=grp["predicted_inputs"][:, :, :] if "predicted_inputs" in grp else None,
             feasible=bool(grp.attrs.get("feasible", True)),
+        )
+        
+    @classmethod
+    def empty_from_cfg(cls, cfg: MPCConfig) -> 'MPCTrajectory':
+        """Initialize empty trajectory arrays based on the provided config."""
+        return cls.empty(
+            T_sim=cfg.T_sim,
+            N=cfg.N,
+            nx=cfg.nx,
+            nu=cfg.nu,
+            dt=cfg.dt
         )
 
     @classmethod
-    def init(cls, T_sim: int, N: int, nx: int, nu: int, dt: float = 0.1) -> 'MPCTrajectory':
+    def empty(cls, T_sim: int, N: int, nx: int, nu: int, dt: float = 0.1) -> 'MPCTrajectory':
         """
         Initialize the trajectory with NaNs.
         
@@ -155,16 +166,16 @@ class MPCTrajectory:
         inputs = np.full((T_sim, nu), np.nan)
         time = np.arange(T_sim + 1) * dt
         cost = np.full((T_sim,), np.nan)
-        solved_states = np.full((T_sim, N + 1, nx), np.nan)
-        solved_inputs = np.full((T_sim, N, nu), np.nan)
+        predicted_states = np.full((T_sim, N + 1, nx), np.nan)
+        predicted_inputs = np.full((T_sim, N, nu), np.nan)
         
         return cls(
             states=states,
             inputs=inputs,
             time=time,
             cost=cost,
-            solved_states=solved_states,
-            solved_inputs=solved_inputs,
+            predicted_states=predicted_states,
+            predicted_inputs=predicted_inputs,
             feasible=True
         )
 
@@ -194,15 +205,15 @@ class MPCData:
         if self.trajectory.cost.shape != (T_sim,):
             __logger__.error(f"Trajectory cost shape mismatch: expected {(T_sim,)}, got {self.trajectory.cost.shape}")
             return False
-        if self.trajectory.solved_states is not None:
+        if self.trajectory.predicted_states is not None:
             N = self.config.N
-            if self.trajectory.solved_states.shape != (T_sim, N + 1, nx):
-                __logger__.error(f"Solved states shape mismatch: expected {(T_sim, N + 1, nx)}, got {self.trajectory.solved_states.shape}")
+            if self.trajectory.predicted_states.shape != (T_sim, N + 1, nx):
+                __logger__.error(f"Predicted states shape mismatch: expected {(T_sim, N + 1, nx)}, got {self.trajectory.predicted_states.shape}")
                 return False
-        if self.trajectory.solved_inputs is not None:
+        if self.trajectory.predicted_inputs is not None:
             N = self.config.N
-            if self.trajectory.solved_inputs.shape != (T_sim, N, nu):
-                __logger__.error(f"Solved inputs shape mismatch: expected {(T_sim, N, nu)}, got {self.trajectory.solved_inputs.shape}")
+            if self.trajectory.predicted_inputs.shape != (T_sim, N, nu):
+                __logger__.error(f"Predicted inputs shape mismatch: expected {(T_sim, N, nu)}, got {self.trajectory.predicted_inputs.shape}")
                 return False
         if len(self.meta.status_codes) != T_sim:
             __logger__.error(f"Meta status codes length mismatch: expected {T_sim}, got {len(self.meta.status_codes)}")
@@ -300,8 +311,8 @@ class MPCDataset:
                 grp.create_dataset("cost", data=t.cost, compression="gzip")
 
                 if save_ocp_trajs:
-                    grp.create_dataset("solved_states", data=t.solved_states, compression="gzip")
-                    grp.create_dataset("solved_inputs", data=t.solved_inputs, compression="gzip")
+                    grp.create_dataset("predicted_states", data=t.predicted_states, compression="gzip")
+                    grp.create_dataset("predicted_inputs", data=t.predicted_inputs, compression="gzip")
 
                 # Metadata & Config as Attributes
                 grp.attrs["meta_json"] = json.dumps(asdict(entry.meta))

@@ -48,7 +48,7 @@ def solve_mpc_closed_loop(
         cfg.T_sim = T_sim
         
     # Initialize Trajectory container with NaNs
-    traj = MPCTrajectory.init(T_sim=cfg.T_sim, N=cfg.N, nx=cfg.nx, nu=cfg.nu, dt=cfg.dt)
+    traj = MPCTrajectory.empty_from_cfg(cfg)
     
     # Set initial state
     traj.states[0, :] = cfg.x0
@@ -86,8 +86,8 @@ def solve_mpc_closed_loop(
             pred_u[k, :] = solver.get(k, "u")
             
         # Store predictions
-        traj.solved_states[i, :, :] = pred_x
-        traj.solved_inputs[i, :, :] = pred_u
+        traj.predicted_states[i, :, :] = pred_x
+        traj.predicted_inputs[i, :, :] = pred_u
         traj.cost[i] = solver.get_cost()
         
         # Apply Control
