@@ -16,6 +16,13 @@ def grune_required_horizon_and_alpha(*, gamma: float, N: int) -> tuple[int, floa
         Sufficient horizon length.
     alpha_N : float
         Guaranteed decrease factor in the relaxed DP inequality.
+
+    Calculation Details
+    -------------------
+    $N_{req}(\gamma) = 2 + \frac{\log(\gamma - 1)}{\log(1 + \frac{1}{\gamma - 1})}$
+    where $N_{req}(\gamma)$ is rounded up to the next integer and at least 2.
+
+    $\alpha_N = 1 - \frac{1}{(\gamma / (\gamma - 1))^N - 1}$
     """
     if not np.isfinite(gamma) or gamma <= 0.0:
         return 2, float("nan")

@@ -73,9 +73,17 @@ Layout of one entry:
 
 ## Verification utilities (linear MPC)
 
-```python
-from mpc_datagen.verification import StabilityCertifier, StabilityVerifier
-```
+### Lyapunov Decrease
+
+
+
+### Grüne Condition
+
+$$N_{req}(\gamma) = 2 + \frac{\log(\gamma - 1)}{\log(1 + \frac{1}{\gamma - 1})}$$
+where $N_{req}(\gamma)$ is rounded up to the next integer and at least 2.
+
+$$\alpha_N = 1 - \frac{1}{(\gamma / (\gamma - 1))^N - 1}$$
+
 
 ## Closed-loop solve
 
