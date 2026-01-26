@@ -8,7 +8,7 @@ from acados_template import AcadosOcpSolver
 from .reports import TerminalIngredientsReport, GruneNoTerminalCertificateReport
 from .gruene import grune_required_horizon_and_alpha
 from .reports import StabilityReport
-from ..extractor import MPCConfigExtractor, LinearSystemExtractor
+from ..extractor import MPCConfigExtractor, LinearSystemExtractor, extract_Qf, extract_QR, extract_stage_reference
 from ..linalg import as_mat, as_vec, sym
 
 
@@ -632,6 +632,23 @@ class StabilityCertifier:
         The returned `is_stable` means **certified**.
         """
         cer = cls(solver)
+        Q, R = extract_QR(
+            cer.cfg.cost.W,
+            cer.cfg.cost.Vx,
+            cer.cfg.cost.Vu,
+            solver.acados_ocp.cost.cost_type,
+        )
+        Qf = extract_Qf(
+            cer.cfg.cost.W_e,
+            cer.cfg.cost.Vx_e,
+            solver.acados_ocp.cost.cost_type_e
+        )
+        x_ref, u_ref = extract_stage_reference(
+            cer.cfg.cost.yref,
+            cer.cfg.nx,
+            cer.cfg.nu,
+        )
+
         # 1) Theorem-backed certificate (does not depend on dataset sampling).
         if cer.sys.gd is not None and np.max(np.abs(np.asarray(cer.sys.gd).reshape(-1))) > float(gd_atol):
             terminal_rep = TerminalIngredientsReport(
@@ -639,7 +656,7 @@ class StabilityCertifier:
                 is_stable=False,
                 message=f"Not applicable: linearization offset gd not near zero (||gd||_inf>{gd_atol:.1e}).",
             )
-        elif cer.cfg.Qf is None:
+        elif not cer.cfg.cost.has_terminal_cost():
             terminal_rep = TerminalIngredientsReport(
                 applicability=False,
                 is_stable=False,
@@ -649,14 +666,14 @@ class StabilityCertifier:
             terminal_rep = certify_linear_mpc_terminal_ingredients(
                 A=cer.sys.A,
                 B=cer.sys.B,
-                Q=cer.cfg.Q,
-                R=cer.cfg.R,
-                P=cer.cfg.Qf,
-                x_bounds=cer.cfg.state_bounds,
-                u_bounds=cer.cfg.input_bounds,
-                terminal_x_bounds=cer.cfg.terminal_state_bounds,
-                x_star=cer.cfg.x_ref,
-                u_star=cer.cfg.u_ref,
+                Q=Q,
+                R=R,
+                P=Qf,
+                x_bounds=(cer.cfg.constraints.lbx, cer.cfg.constraints.ubx),
+                u_bounds=(cer.cfg.constraints.lbu, cer.cfg.constraints.ubu),
+                terminal_x_bounds=(cer.cfg.constraints.lbx_e, cer.cfg.constraints.ubx_e),
+                x_star=x_ref,
+                u_star=u_ref,
             )
 
         # Optional: Grüne no-terminal certificate for problems without terminal ingredients.
@@ -665,18 +682,18 @@ class StabilityCertifier:
             is_stable=False,
             message="Not evaluated.",
         )
-        if (cer.cfg.Qf is None) and (cer.cfg.terminal_state_bounds is None):
+        if (Qf is None) and (cer.cfg.terminal_state_bounds is None):
             try:
                 grune_cert_rep = certify_linear_mpc_grune_no_terminal(
                     A=cer.sys.A,
                     B=cer.sys.B,
-                    Q=cer.cfg.Q,
-                    R=cer.cfg.R,
+                    Q=Q,
+                    R=R,
                     N=int(cer.cfg.N),
-                    x_bounds=cer.cfg.state_bounds,
-                    u_bounds=cer.cfg.input_bounds,
-                    x_star=cer.cfg.x_ref,
-                    u_star=cer.cfg.u_ref,
+                    x_bounds=(cer.cfg.constraints.lbx, cer.cfg.constraints.ubx),
+                    u_bounds=(cer.cfg.constraints.lbu, cer.cfg.constraints.ubu),
+                    x_star=x_ref,
+                    u_star=u_ref,
                 )
             except Exception as e:
                 grune_cert_rep = GruneNoTerminalCertificateReport(

@@ -1,17 +1,11 @@
 import numpy as np
 
 from typing import Any, Literal, Optional, Tuple
+from acados_template import AcadosOcpSolver
 
 from .mpc_data import MPCConfig, LinearSystem
 from .linalg import discretize_and_linearize_rk4
 
-try:
-    from acados_template import AcadosOcpSolver
-except Exception:
-    raise ImportError(
-        "StabilityVerifier requires `acados_template` (acados Python interface). "
-        "Install it and ensure it is importable."
-    )
 
 # --- Helpers ---
 def _ensure_linear_ls_cost_type(cost_type: Literal['LINEAR_LS', 'NONLINEAR_LS']) -> None:
@@ -99,7 +93,7 @@ def indexed_bounds(
     full_ub[idx] = ub
     return full_lb, full_ub
 
-def extract_stage_cost_matrices(
+def extract_QR(
     W: np.ndarray, 
     Vx: np.ndarray, 
     Vu: np.ndarray, 
@@ -120,7 +114,7 @@ def extract_stage_cost_matrices(
 
     return Q, R
 
-def extract_terminal_cost_matrices(
+def extract_Qf(
     W_e: np.ndarray,
     Vx_e: np.ndarray,
     cost_type_e: Literal['LINEAR_LS', 'NONLINEAR_LS']
@@ -152,25 +146,13 @@ class MPCConfigExtractor():
         self.ocp = solver.acados_ocp
         self.cfg = MPCConfig(
             T_sim=0,  # not extractable here
-            N=self.ocp.dims.N,
+            N=self.ocp.solver_options.N_horizon,
             nx=self.ocp.dims.nx,
             nu=self.ocp.dims.nu,
-            dt=float(self.ocp.solver_options.tf) / float(self.ocp.dims.N),
+            dt=float(self.ocp.solver_options.tf) / float(self.ocp.solver_options.N_horizon),
         )
-        
-        self.cfg.Q, self.cfg.R, self.cfg.Qf = self._extract_cost_matrices()
-
-        references = self._extract_reference()
-        self.cfg.x_ref, self.cfg.u_ref = references if references is not None else (None, None)
-
-        state_bounds = self._extract_state_bounds()
-        self.cfg.state_bounds = np.vstack(state_bounds) if state_bounds is not None else None
-
-        input_bounds = self._extract_input_bounds()
-        self.cfg.input_bounds = np.vstack(input_bounds) if input_bounds is not None else None
-
-        self.cfg.terminal_state_bounds = self._extract_terminal_state_bounds()
-        self.cfg.x0 = self._extract_initial_state()
+        self._extract_constraints()
+        self._extract_cost()
     
     @classmethod
     def get_cfg(cls, solver: AcadosOcpSolver) -> MPCConfig:
@@ -182,74 +164,54 @@ class MPCConfigExtractor():
         """
         extractor = cls(solver)
         return extractor.cfg
-    
-    def _extract_initial_state(self) -> Optional[np.ndarray]:
+
+    def _extract_cost(self) -> None:
         """Extract the initial state x0 from acados constraints."""
-        x0 = self.ocp.constraints.x0
-        if x0 is None:
-            return None
-        return np.asarray(x0).reshape(-1)
+        self.cfg.cost.Vx = self.ocp.cost.Vx
+        self.cfg.cost.Vu = self.ocp.cost.Vu
+        self.cfg.cost.W = self.ocp.cost.W
+        self.cfg.cost.yref = self.ocp.cost.yref
+        self.cfg.cost.Vx_e = self.ocp.cost.Vx_e
+        self.cfg.cost.W_e = self.ocp.cost.W_e
+        self.cfg.cost.yref_e = self.ocp.cost.yref_e
 
-    def _extract_state_bounds(self) -> Optional[tuple[np.ndarray, np.ndarray]]:
-        """Extract full state bounds from acados indexed bounds."""
-        return indexed_bounds(
-            self.ocp.constraints.lbx,
-            self.ocp.constraints.ubx,
-            self.ocp.constraints.idxbx,
-            self.cfg.nx,
-        )
-
-    def _extract_input_bounds(self) -> Optional[tuple[np.ndarray, np.ndarray]]:
+    def _extract_constraints(self) -> None:
         """Extract full input bounds from acados indexed bounds."""
-        return indexed_bounds(
-            self.ocp.constraints.lbu,
-            self.ocp.constraints.ubu,
-            self.ocp.constraints.idxbu,
-            self.cfg.nu,
-        )
-        
-    def _extract_terminal_state_bounds(self) -> Optional[tuple[np.ndarray, np.ndarray]]:
-        """Extract full terminal state bounds from acados indexed bounds."""
-        return indexed_bounds(
-            self.ocp.constraints.lbx_e,
-            self.ocp.constraints.ubx_e,
-            self.ocp.constraints.idxbx_e,
-            self.cfg.nx,
-        )
-        
-    def _extract_reference(self) -> Optional[tuple[np.ndarray, np.ndarray]]:
-        """Extract (x*, u*) from acados yref."""
-        yref = self.ocp.cost.yref
+        constr = self.ocp.constraints
 
-        x_u_ref = extract_stage_reference(yref, self.cfg.nx, self.cfg.nu)
-
-        if x_u_ref is None:
-            return None, None
-        x_ref, u_ref = x_u_ref
-        return x_ref, u_ref
-        
-    def _extract_cost_matrices(self) -> tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
-        """Extract the exact LINEAR_LS cost structure used by the OCP.
-
-        This is the authoritative definition for the stage and terminal costs:
-            l(x,u) = || Vx x + Vu u - yref ||^2_W
-            Vf(x)  = || Vx_e x - yref_e ||^2_{W_e}
-        """
-        cost = self.ocp.cost
-        Q, R = extract_stage_cost_matrices(
-            W=cost.W,
-            Vx=cost.Vx,
-            Vu=cost.Vu,
-            cost_type=cost.cost_type,
+        # State bounds
+        x_bounds = indexed_bounds(
+            constr.lbx,
+            constr.ubx,
+            constr.idxbx,
+            self.cfg.nx
         )
-        Qf = extract_terminal_cost_matrices(
-            W_e=cost.W_e,
-            Vx_e=cost.Vx_e,
-            cost_type_e=cost.cost_type_e,
-        )
+        if x_bounds is not None:
+            self.cfg.constraints.lbx = x_bounds[0]
+            self.cfg.constraints.ubx = x_bounds[1]
 
-        return Q, R, Qf
-    
+        # Input bounds
+        u_bounds = indexed_bounds(
+            constr.lbu,
+            constr.ubu,
+            constr.idxbu,
+            self.cfg.nu
+        )
+        if u_bounds is not None:
+            self.cfg.constraints.lbu = u_bounds[0]
+            self.cfg.constraints.ubu = u_bounds[1]
+
+        # Terminal state bounds
+        x_e_bounds = indexed_bounds(
+            constr.lbx_e,
+            constr.ubx_e,
+            np.arange(self.cfg.nx),
+            self.cfg.nx
+        )
+        if x_e_bounds is not None:
+            self.cfg.constraints.lbx_e = x_e_bounds[0]
+            self.cfg.constraints.ubx_e = x_e_bounds[1]
+
     
 class LinearSystemExtractor:
     """Extractor for AcadosOcpSolver model dynamics.
@@ -257,17 +219,36 @@ class LinearSystemExtractor:
     This class extracts the nonlinear dynamics function from an `AcadosOcpSolver`
     instance for use in Lyapunov verification routines.
     """
-    
+
     def __init__(self, solver: AcadosOcpSolver) -> None:
         self.ocp = solver.acados_ocp
         self.cfg = MPCConfigExtractor.get_cfg(solver)
-        self.linear_system = self._extract_discretized_dynamics(self.cfg.x_ref, self.cfg.u_ref, self.cfg.dt)
-        
+        x_ref, u_ref = self._extract_x_and_u_lin()
+        self.linear_system = self._extract_discretized_dynamics(x_ref, u_ref, self.cfg.dt)
+
     @classmethod
     def get_system(cls, solver: AcadosOcpSolver) -> LinearSystem:
         """Get the linearized system matrices from the solver."""
         extractor = cls(solver)
         return extractor.linear_system
+
+    def _extract_x_and_u_lin(self) -> Tuple[np.ndarray, np.ndarray]:
+        """Get linearization points for state and input."""
+        if self.cfg.cost.yref.shape[0] != (self.cfg.nx + self.cfg.nu):
+            raise ValueError(
+                "Cannot extract linearization points from yref with unexpected size. "
+                f"Expected size nx + nu = {self.cfg.nx + self.cfg.nu}, got {self.cfg.cost.yref.shape[0]}."
+            )
+
+        x_lin = self.cfg.cost.yref[:self.cfg.nx]
+        u_lin = self.cfg.cost.yref[self.cfg.nx:]
+
+        if x_lin is None:
+            raise ValueError("Cannot extract linearization point for state: x_ref is None.")
+        if u_lin is None:
+            raise ValueError("Cannot extract linearization point for input: u_ref is None.")
+
+        return x_lin, u_lin
 
     def _extract_discretized_dynamics(self, x_lin: np.ndarray, u_lin: np.ndarray, dt: float) -> LinearSystem:
         """Compute the discrete-time linearization (A, B, g).

@@ -45,9 +45,7 @@ class StabilityVerifier:
         
         self.cfg = None
         self.sys = None
-        self.ocp = None
         if isinstance(solver, AcadosOcpSolver):
-            self.ocp = solver.acados_ocp
             self.cfg = MPCConfigExtractor.get_cfg(solver)
             self.cfg.T_sim = dataset[0].config.T_sim
             self.sys = LinearSystemExtractor.get_system(solver)
@@ -88,15 +86,11 @@ class StabilityVerifier:
                 "Entry horizon N does not match solver N. "
                 "This verifier assumes a single horizon N for the entire dataset."
             )
-        if local_cfg.x_ref.shape != self.cfg.x_ref.shape or not np.allclose(local_cfg.x_ref, self.cfg.x_ref, rtol=0.0, atol=0.0):
+        if local_cfg.cost.yref.shape != self.cfg.cost.yref.shape \
+            or not np.allclose(local_cfg.cost.yref, self.cfg.cost.yref, rtol=0.0, atol=0.0):
             raise ValueError(
-                "Entry x_ref does not match solver x_ref. "
-                "This verifier assumes a single (x_ref, u_ref) pair for the entire dataset."
-            )
-        if local_cfg.u_ref.shape != self.cfg.u_ref.shape or not np.allclose(local_cfg.u_ref, self.cfg.u_ref, rtol=0.0, atol=0.0):
-            raise ValueError(
-                "Entry u_ref does not match solver u_ref. "
-                "This verifier assumes a single (x_ref, u_ref) pair for the entire dataset."
+                "Entry yref does not match solver yref. "
+                "This verifier assumes a single yref for the entire dataset."
             )
         if self.cfg.T_sim != local_cfg.T_sim:
             __logger__.warning(
@@ -104,26 +98,24 @@ class StabilityVerifier:
                 "Using dataset T_sim for verification."
             )
             self.cfg.T_sim = local_cfg.T_sim
-            
+
         if self.cfg.T_sim > self.traj.length:
             raise ValueError(
                 "Entry T_sim exceeds trajectory length. T_sim must be <= trajectory length."
                 f"{self.cfg.T_sim} > {self.traj.length}"
             )
-            
-        if self.cfg.has_terminal_bounds() != local_cfg.has_terminal_bounds():
+        if self.cfg.constraints.has_terminal_state_bounds() != local_cfg.constraints.has_terminal_state_bounds():
             raise ValueError(
                 "Entry and solver terminal state_bounds do not match. "
                 "This verifier assumes terminal state_bounds for the entire dataset."
             )
-        if self.cfg.has_terminal_cost() != local_cfg.has_terminal_cost():
+        if self.cfg.cost.has_terminal_cost() != local_cfg.cost.has_terminal_cost():
             raise ValueError(
                 "Entry and solver terminal_cost do not match. "
                 "This verifier assumes terminal_cost for the entire dataset."
             )
-            
+
         self.valid = self._validate_data_integrity()
-        
         return self.valid
 
     def _require_bound_entry(self) -> None:
@@ -193,21 +185,21 @@ class StabilityVerifier:
         """Raw LINEAR_LS stage cost without any global prefactors."""
         x = np.asarray(x, dtype=float).reshape(-1)
         u = np.asarray(u, dtype=float).reshape(-1)
-        y = self.ocp.cost.Vx @ x + self.ocp.cost.Vu @ u
-        e = (y - self.ocp.cost.yref).reshape(-1)
-        return 0.5 * float(e.T @ self.ocp.cost.W @ e)
+        y = self.cfg.cost.Vx @ x + self.cfg.cost.Vu @ u
+        e = (y - self.cfg.cost.yref).reshape(-1)
+        return 0.5 * float(e.T @ self.cfg.cost.W @ e)
 
     def _terminal_cost(self, x: np.ndarray) -> float:
         """Raw LINEAR_LS terminal cost without any global prefactors."""
-        if self.ocp.cost.W_e is None:
+        if self.cfg.cost.W_e is None:
             return 0.0
         x = np.asarray(x, dtype=float).reshape(-1)
 
-        Vx_e = self.ocp.cost.Vx_e if self.ocp.cost.Vx_e is not None else np.eye(x.size)
-        yref_e = self.ocp.cost.yref_e if self.ocp.cost.yref_e is not None else np.zeros((Vx_e.shape[0],), dtype=float)
+        Vx_e = self.cfg.cost.Vx_e if self.cfg.cost.Vx_e is not None else np.eye(x.size)
+        yref_e = self.cfg.cost.yref_e if self.cfg.cost.yref_e is not None else np.zeros((Vx_e.shape[0],), dtype=float)
         y_e = Vx_e @ x
         e = (y_e - yref_e).reshape(-1)
-        return 0.5 * float(e.T @ self.ocp.cost.W_e @ e)
+        return 0.5 * float(e.T @ self.cfg.cost.W_e @ e)
     
     def _l_star(self, x: np.ndarray) -> float:
         """Lower bound on l*(x) := min_u l(x,u) via unconstrained minimization.
@@ -217,13 +209,13 @@ class StabilityVerifier:
         """
         x = np.asarray(x, dtype=float).reshape(-1)
 
-        a = (self.ocp.cost.Vx @ x - self.ocp.cost.yref).reshape(-1)  # y = a + Vu u
-        H = self.ocp.cost.Vu.T @ self.ocp.cost.W @ self.ocp.cost.Vu
+        a = (self.cfg.cost.Vx @ x - self.cfg.cost.yref).reshape(-1)  # y = a + Vu u
+        H = self.cfg.cost.Vu.T @ self.cfg.cost.W @ self.cfg.cost.Vu
         H = 0.5 * (H + H.T)
-        g = (self.ocp.cost.Vu.T @ self.ocp.cost.W @ a).reshape(-1)
+        g = (self.cfg.cost.Vu.T @ self.cfg.cost.W @ a).reshape(-1)
 
         if H.size == 0:
-            return float(a.T @ self.ocp.cost.W @ a)
+            return float(a.T @ self.cfg.cost.W @ a)
 
         try:
             u_star = -np.linalg.solve(H, g)
@@ -459,8 +451,8 @@ class StabilityVerifier:
             A report indicating applicability and estimates of gamma, alpha_N, and required horizon.
         """
         cfg0 = self.dataset[0].config
-        has_terminal_cost = cfg0.has_terminal_cost()
-        has_terminal_bounds = cfg0.has_terminal_bounds()
+        has_terminal_cost = cfg0.cost.has_terminal_cost()
+        has_terminal_bounds = cfg0.constraints.has_terminal_state_bounds()
 
         if has_terminal_cost or has_terminal_bounds:
             return GrüneHorizonReport(

@@ -11,6 +11,15 @@ from .package_logger import PackageLogger
 
 __logger__ = PackageLogger.get_logger(__name__)
 
+def _is_defined_array(arr: Optional[np.ndarray]) -> bool:
+    """Check if an array is defined and non-empty."""
+    if arr is None:
+        return False
+    arr = np.asarray(arr)
+    if arr.size == 0:
+        return False
+    return True 
+
 @dataclass
 class MPCMeta:
     """Metadata regarding the MPC execution."""
@@ -22,13 +31,134 @@ class MPCMeta:
     sim_duration_wall: float = 0.0
     steps_simulated: int = 0
     status_codes: List[int] = field(default_factory=list)
-    
+
+    @classmethod
+    def from_hdf5(cls, grp: h5py.Group) -> "MPCMeta":
+        """Load metadata from JSON attribute in the provided group."""
+        meta_json = grp.attrs.get("meta_json", "{}")
+        meta_dict = json.loads(meta_json)
+        return cls(**meta_dict)
+
+    def to_hdf5(self, grp: h5py.Group) -> None:
+        """Save metadata as JSON attribute in the provided group."""
+        grp.attrs["meta_json"] = json.dumps(asdict(self))
+
 @dataclass
 class LinearSystem:
     """Linearized system matrices."""
-    A: np.ndarray
-    B: np.ndarray
-    gd: np.ndarray
+    A: np.ndarray = field(default_factory=lambda: np.array([[]]))
+    B: np.ndarray = field(default_factory=lambda: np.array([[]]))
+    gd: np.ndarray = field(default_factory=lambda: np.array([[]]))
+
+    @classmethod
+    def from_hdf5(cls, grp: h5py.Group) -> "LinearSystem":
+        """Load linear system matrices from a trajectory group (expects a `linear_system` subgroup)."""
+        lin_sys_grp = grp.get("linear_system", None)
+        if lin_sys_grp is None:
+            raise ValueError("No 'linear_system' group found in the provided HDF5 group.")
+
+        return cls(
+            A=lin_sys_grp["A"][:] if "A" in lin_sys_grp else np.array([]),
+            B=lin_sys_grp["B"][:] if "B" in lin_sys_grp else np.array([]),
+            gd=lin_sys_grp["gd"][:] if "gd" in lin_sys_grp else np.array([]),
+        )
+
+    def to_hdf5(self, grp: h5py.Group) -> None:
+        """Save linear system matrices to a trajectory group (creates a `linear_system` subgroup)."""
+        lin_sys_grp = grp.create_group("linear_system")
+        lin_sys_grp.create_dataset("A", data=self.A, compression="gzip")
+        lin_sys_grp.create_dataset("B", data=self.B, compression="gzip")
+        lin_sys_grp.create_dataset("gd", data=self.gd, compression="gzip") 
+
+@dataclass
+class LinearLSCost:
+    """Linearized system matrices."""
+    Vx: np.ndarray = field(default_factory=lambda: np.array([[]]))
+    Vu: np.ndarray = field(default_factory=lambda: np.array([[]]))
+    W: np.ndarray = field(default_factory=lambda: np.array([[]]))
+    yref: np.ndarray = field(default_factory=lambda: np.array([[]]))
+    Vx_e: np.ndarray = field(default_factory=lambda: np.array([[]]))
+    W_e: np.ndarray = field(default_factory=lambda: np.array([[]]))
+    yref_e: np.ndarray = field(default_factory=lambda: np.array([[]]))
+
+    def has_terminal_cost(self) -> bool:
+        """Check if terminal cost matrices are defined."""
+        return _is_defined_array(self.Vx_e) and _is_defined_array(self.W_e)
+
+    @classmethod
+    def from_hdf5(cls, grp: h5py.Group) -> "LinearLSCost":
+        """Load cost matrices from a trajectory group (expects a `cost` subgroup)."""
+        cost_grp = grp.get("cost", None)
+        if cost_grp is None:
+            raise ValueError("No 'cost' group found in the provided HDF5 group.")
+
+        return cls(
+            Vx=cost_grp["Vx"][:] if "Vx" in cost_grp else np.array([]),
+            Vu=cost_grp["Vu"][:] if "Vu" in cost_grp else np.array([]),
+            W=cost_grp["W"][:] if "W" in cost_grp else np.array([]),
+            yref=cost_grp["yref"][:] if "yref" in cost_grp else np.array([]),
+            Vx_e=cost_grp["Vx_e"][:] if "Vx_e" in cost_grp else np.array([]),
+            W_e=cost_grp["W_e"][:] if "W_e" in cost_grp else np.array([]),
+            yref_e=cost_grp["yref_e"][:] if "yref_e" in cost_grp else np.array([]),
+        )
+
+    def to_hdf5(self, grp: h5py.Group) -> None:
+        """Save cost matrices to a trajectory group (creates a `cost` subgroup)."""
+        cost_grp = grp.create_group("cost")
+        cost_grp.create_dataset("Vx", data=self.Vx, compression="gzip")
+        cost_grp.create_dataset("Vu", data=self.Vu, compression="gzip")
+        cost_grp.create_dataset("W", data=self.W, compression="gzip")
+        cost_grp.create_dataset("yref", data=self.yref, compression="gzip")
+        cost_grp.create_dataset("Vx_e", data=self.Vx_e, compression="gzip")
+        cost_grp.create_dataset("W_e", data=self.W_e, compression="gzip")
+        cost_grp.create_dataset("yref_e", data=self.yref_e, compression="gzip")
+
+@dataclass
+class Constraints:
+    """Linearized system matrices."""
+    x0: np.ndarray = field(default_factory=lambda: np.array([]))
+    lbx: np.ndarray = field(default_factory=lambda: np.array([]))
+    ubx: np.ndarray = field(default_factory=lambda: np.array([]))
+    lbu: np.ndarray = field(default_factory=lambda: np.array([]))
+    ubu: np.ndarray = field(default_factory=lambda: np.array([]))
+    lbx_e: np.ndarray = field(default_factory=lambda: np.array([]))
+    ubx_e: np.ndarray = field(default_factory=lambda: np.array([]))
+
+    def has_state_bounds(self) -> bool:
+        """Check if state bounds are defined."""
+        return _is_defined_array(self.lbx) and _is_defined_array(self.ubx)
+
+    def has_terminal_state_bounds(self) -> bool:
+        """Check if terminal state bounds are defined."""
+        return _is_defined_array(self.lbx_e) and _is_defined_array(self.ubx_e)
+
+    @classmethod
+    def from_hdf5(cls, grp: h5py.Group) -> "Constraints":
+        """Load constraints from a trajectory group (expects a `constraints` subgroup)."""
+        cons_grp = grp.get("constraints", None)
+        if cons_grp is None:
+            raise ValueError("No 'constraints' group found in the provided HDF5 group.")
+
+        return cls(
+            x0=cons_grp["x0"][:] if "x0" in cons_grp else np.array([]),
+            lbx=cons_grp["lbx"][:] if "lbx" in cons_grp else np.array([]),
+            ubx=cons_grp["ubx"][:] if "ubx" in cons_grp else np.array([]),
+            lbu=cons_grp["lbu"][:] if "lbu" in cons_grp else np.array([]),
+            ubu=cons_grp["ubu"][:] if "ubu" in cons_grp else np.array([]),
+            lbx_e=cons_grp["lbx_e"][:] if "lbx_e" in cons_grp else np.array([]),
+            ubx_e=cons_grp["ubx_e"][:] if "ubx_e" in cons_grp else np.array([]),
+        )
+
+    def to_hdf5(self, grp: h5py.Group) -> None:
+        """Save constraints to a trajectory group (creates a `constraints` subgroup)."""
+        cons_grp = grp.create_group("constraints")
+        cons_grp.create_dataset("x0", data=self.x0, compression="gzip")
+        cons_grp.create_dataset("lbx", data=self.lbx, compression="gzip")
+        cons_grp.create_dataset("ubx", data=self.ubx, compression="gzip")
+        cons_grp.create_dataset("lbu", data=self.lbu, compression="gzip")
+        cons_grp.create_dataset("ubu", data=self.ubu, compression="gzip")
+        cons_grp.create_dataset("lbx_e", data=self.lbx_e, compression="gzip")
+        cons_grp.create_dataset("ubx_e", data=self.ubx_e, compression="gzip")
 
 @dataclass
 class MPCConfig:
@@ -38,33 +168,9 @@ class MPCConfig:
     nx: int = 0                     # State dimension
     nu: int = 0                     # Input dimension
     dt: float = 0.1                 # Sampling time
-    Q: np.ndarray = field(default_factory=lambda: np.array([[]]))  # State cost
-    R: np.ndarray = field(default_factory=lambda: np.array([[]]))  # Input cost
-    Qf: Optional[np.ndarray] = None  # Terminal state cost
-    x0: Optional[np.ndarray] = None  # Initial state
-    x_ref: Optional[np.ndarray] = None  # Target state
-    u_ref: Optional[np.ndarray] = None  # Target input
-    state_bounds: Optional[np.ndarray] = None  # Shape (2, nx)
-    terminal_state_bounds: Optional[np.ndarray] = None  # Shape (2, nx)
-    input_bounds: Optional[np.ndarray] = None  # Shape (2, nu)
-
-    @staticmethod
-    def _is_defined_array(arr: Optional[np.ndarray]) -> bool:
-        """Check if an array is defined and non-empty."""
-        if arr is None:
-            return False
-        arr = np.asarray(arr)
-        if arr.size == 0:
-            return False
-        return True 
-
-    def has_terminal_cost(self) -> bool:
-        """Check if a terminal cost is defined."""
-        return self._is_defined_array(self.Qf)
-    
-    def has_terminal_bounds(self) -> bool:
-        """Check if terminal state bounds are defined."""
-        return self._is_defined_array(self.terminal_state_bounds)
+    constraints: Constraints = field(default_factory=Constraints)
+    model: LinearSystem = field(default_factory=LinearSystem)
+    cost: LinearLSCost = field(default_factory=LinearLSCost)
 
     @classmethod
     def from_hdf5(cls, grp: h5py.Group) -> "MPCConfig":
@@ -73,28 +179,30 @@ class MPCConfig:
         if cfg_grp is None:
             raise ValueError("No 'config' group found in the provided HDF5 group.")
 
-        t_sim = int(cfg_grp.attrs.get("T_sim", 0))
-        n_horizon = int(cfg_grp.attrs.get("N", 10))
-        nx = int(cfg_grp.attrs.get("nx", 2))
-        nu = int(cfg_grp.attrs.get("nu", 1))
-        dt = float(cfg_grp.attrs.get("dt", 0.1))
-
         return cls(
-            T_sim=t_sim,
-            N=n_horizon,
-            nx=nx,
-            nu=nu,
-            dt=dt,
-            Q=cfg_grp["Q"][:],
-            R=cfg_grp["R"][:],
-            Qf=cfg_grp["Qf"][:] if "Qf" in cfg_grp else None,
-            x0=cfg_grp["x0"][:] if "x0" in cfg_grp else None,
-            x_ref=cfg_grp["x_ref"][:] if "x_ref" in cfg_grp else None,
-            u_ref=cfg_grp["u_ref"][:] if "u_ref" in cfg_grp else None,
-            state_bounds=cfg_grp["state_bounds"][:] if "state_bounds" in cfg_grp else None,
-            terminal_state_bounds=cfg_grp["terminal_state_bounds"][:] if "terminal_state_bounds" in cfg_grp else None,
-            input_bounds=cfg_grp["input_bounds"][:] if "input_bounds" in cfg_grp else None,
+            T_sim=int(cfg_grp.attrs.get("T_sim", 0)),
+            N=int(cfg_grp.attrs.get("N", 10)),
+            nx=int(cfg_grp.attrs.get("nx", 2)),
+            nu=int(cfg_grp.attrs.get("nu", 1)),
+            dt=float(cfg_grp.attrs.get("dt", 0.1)),
+
+            constraints=Constraints.from_hdf5(grp),
+            model=LinearSystem.from_hdf5(grp),
+            cost=LinearLSCost.from_hdf5(grp),
         )
+
+    def to_hdf5(self, grp: h5py.Group) -> None:
+        """Save config to a trajectory group (creates a `config` subgroup)."""
+        cfg_grp = grp.create_group("config")
+        cfg_grp.attrs["T_sim"] = int(self.T_sim)
+        cfg_grp.attrs["N"] = int(self.N)
+        cfg_grp.attrs["nx"] = int(self.nx)
+        cfg_grp.attrs["nu"] = int(self.nu)
+        cfg_grp.attrs["dt"] = float(self.dt)
+
+        self.constraints.to_hdf5(grp)
+        self.model.to_hdf5(grp)
+        self.cost.to_hdf5(grp)
 
 
 @dataclass
@@ -132,7 +240,20 @@ class MPCTrajectory:
             predicted_inputs=grp["predicted_inputs"][:, :, :] if "predicted_inputs" in grp else None,
             feasible=bool(grp.attrs.get("feasible", True)),
         )
-        
+
+    def to_hdf5(self, grp: h5py.Group, save_ocp_trajs: bool = True) -> None:
+        """Save trajectory arrays to a trajectory group."""
+        traj_grp = grp.create_group("trajectory")
+        traj_grp.create_dataset("states", data=self.states, compression="gzip")
+        traj_grp.create_dataset("inputs", data=self.inputs, compression="gzip")
+        traj_grp.create_dataset("time", data=self.time, compression="gzip")
+        traj_grp.create_dataset("cost", data=self.cost, compression="gzip")
+
+        if save_ocp_trajs and self.predicted_states is not None:
+            traj_grp.create_dataset("predicted_states", data=self.predicted_states, compression="gzip")
+        if save_ocp_trajs and self.predicted_inputs is not None:
+            traj_grp.create_dataset("predicted_inputs", data=self.predicted_inputs, compression="gzip")
+
     @classmethod
     def empty_from_cfg(cls, cfg: MPCConfig) -> 'MPCTrajectory':
         """Initialize empty trajectory arrays based on the provided config."""
@@ -265,7 +386,7 @@ class MPCDataset:
         entry.meta.id = len(self)  # Assign ID based on current length
         self.memory_buffer.append(entry)
 
-    def save(self, path: str = None, mode: str = 'w', save_ocp_trajs: bool = True) -> None:
+    def save(self, path: Path = None, mode: str = 'w', save_ocp_trajs: bool = True) -> None:
         """Flushes memory buffer to HDF5."""
         target_path = Path(path) if path else self.file_path
         if not target_path: 
@@ -278,45 +399,10 @@ class MPCDataset:
                 group_name = f"traj_{start_idx + i}"
                 grp = f.create_group(group_name)
 
-                # Config (store as datasets, not JSON)
-                cfg = entry.config
-                cfg_grp = grp.create_group("config")
-                cfg_grp.attrs["T_sim"] = int(cfg.T_sim)
-                cfg_grp.attrs["N"] = int(cfg.N)
-                cfg_grp.attrs["nx"] = int(cfg.nx)
-                cfg_grp.attrs["nu"] = int(cfg.nu)
-                cfg_grp.attrs["dt"] = float(cfg.dt)
-                cfg_grp.create_dataset("Q", data=np.asarray(cfg.Q), compression="gzip")
-                cfg_grp.create_dataset("R", data=np.asarray(cfg.R), compression="gzip")
-                if cfg.Qf is not None:
-                    cfg_grp.create_dataset("Qf", data=np.asarray(cfg.Qf), compression="gzip")
-                if cfg.x0 is not None:
-                    cfg_grp.create_dataset("x0", data=np.asarray(cfg.x0), compression="gzip")
-                if cfg.x_ref is not None:
-                    cfg_grp.create_dataset("x_ref", data=np.asarray(cfg.x_ref), compression="gzip")
-                if cfg.u_ref is not None:
-                    cfg_grp.create_dataset("u_ref", data=np.asarray(cfg.u_ref), compression="gzip")
-                if cfg.state_bounds is not None:
-                    cfg_grp.create_dataset("state_bounds", data=np.asarray(cfg.state_bounds), compression="gzip")
-                if cfg.terminal_state_bounds is not None:
-                    cfg_grp.create_dataset("terminal_state_bounds", data=np.asarray(cfg.terminal_state_bounds), compression="gzip")
-                if cfg.input_bounds is not None:
-                    cfg_grp.create_dataset("input_bounds", data=np.asarray(cfg.input_bounds), compression="gzip")
-
-                # Trajectory Data
-                t = entry.trajectory
-                grp.create_dataset("states", data=t.states, compression="gzip")
-                grp.create_dataset("inputs", data=t.inputs, compression="gzip")
-                grp.create_dataset("time", data=t.time, compression="gzip")
-                grp.create_dataset("cost", data=t.cost, compression="gzip")
-
-                if save_ocp_trajs:
-                    grp.create_dataset("predicted_states", data=t.predicted_states, compression="gzip")
-                    grp.create_dataset("predicted_inputs", data=t.predicted_inputs, compression="gzip")
-
-                # Metadata & Config as Attributes
-                grp.attrs["meta_json"] = json.dumps(asdict(entry.meta))
-                grp.attrs["feasible"] = t.feasible
+                entry.config.to_hdf5(grp)
+                entry.trajectory.to_hdf5(grp, save_ocp_trajs)
+                entry.meta.to_hdf5(grp)
+                grp.attrs["feasible"] = entry.trajectory.feasible
         
         # Clear buffer and reload file to refresh indices
         self.memory_buffer = []
@@ -326,7 +412,7 @@ class MPCDataset:
         self._indices = sorted(list(self._h5_file.keys()), key=lambda x: int(x.split('_')[1]))
 
     @classmethod
-    def load(cls, path: str) -> 'MPCDataset':
+    def load(cls, path: Path) -> 'MPCDataset':
         """
         Lazy Load: Just opens the file, does NOT read data.
         """
@@ -361,13 +447,9 @@ class MPCDataset:
         key = self._indices[file_idx]
         grp = self._h5_file[key]
 
-        # Read Arrays (This reads binary data from disk into RAM)
+        # This reads binary data from disk into RAM)
         traj = MPCTrajectory.from_hdf5(grp)
-
-        # Read Metadata
-        meta = MPCMeta(**json.loads(grp.attrs["meta_json"]))
-
-        # Read Config
+        meta = MPCMeta.from_hdf5(grp)
         config = MPCConfig.from_hdf5(grp)
 
         return MPCData(trajectory=traj, meta=meta, config=config)
@@ -401,7 +483,7 @@ class MPCDataset:
         # From File
         for i, key in enumerate(self._indices):
             grp = self._h5_file[key]
-            meta = json.loads(grp.attrs["meta_json"])
+            meta = MPCMeta.from_hdf5(grp)
             row = {}
             cfg_grp = grp.get("config", None)
             if cfg_grp is not None:
@@ -413,7 +495,7 @@ class MPCDataset:
                     "dt": float(cfg_grp.attrs.get("dt", 0.1)),
                 })
                 
-            row.update(meta)
+            row.update(asdict(meta))
             row['original_index'] = len(self.memory_buffer) + i
             row['source'] = 'file'
             rows.append(row)
