@@ -51,12 +51,12 @@ def solve_mpc_closed_loop(
     traj = MPCTrajectory.empty_from_cfg(cfg)
     
     # Set initial state
-    traj.states[0, :] = cfg.x0
+    traj.states[0, :] = cfg.constraints.x0.copy()
     
     solve_times = []
     status_codes = []
     
-    current_x = cfg.x0.copy()
+    current_x = cfg.constraints.x0.copy()
     is_feasible_run = True
 
     sim_start_time = time.time()

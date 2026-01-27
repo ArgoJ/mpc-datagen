@@ -80,12 +80,11 @@ class MPCDataGenerator:
             if np.any(percentages <= 0) or np.any(percentages > 1):
                 raise ValueError("Percentages must be in the interval (0, 1].")
 
-            if np.any(~np.isfinite(self.mpc_config.state_bounds)):
+            if np.any(~np.isfinite(self.mpc_config.constraints.lbx)) or np.any(~np.isfinite(self.mpc_config.constraints.ubx)):
                 raise ValueError("Percentage mode requires finite lbx/ubx for all states.")
 
             self.sample_lb, self.sample_ub = self._calculate_percentage_bounds(
-                self.mpc_config.state_bounds[0], self.mpc_config.state_bounds[1], percentages)
-
+                self.mpc_config.constraints.lbx, self.mpc_config.constraints.ubx, percentages)
         elif self.bound_type == "absolute":
             if self.x0_bounds.shape != (2, nx):
                 raise ValueError(f"Bounds must have shape (2, {nx}) for absolute mode. Got {self.x0_bounds.shape}.")
@@ -124,7 +123,9 @@ class MPCDataGenerator:
         try:
             for _ in iterator:
                 x0 = np.random.uniform(self.sample_lb, self.sample_ub)
-                temp_cfg = replace(self.mpc_config, x0=x0)
+                temp_cfg = replace(
+                    self.mpc_config, 
+                    constraints=replace(self.mpc_config.constraints, x0=x0))
 
                 if self.reset_solver:
                     self.solver.reset()

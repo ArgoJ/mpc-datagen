@@ -186,9 +186,9 @@ class MPCConfig:
             nu=int(cfg_grp.attrs.get("nu", 1)),
             dt=float(cfg_grp.attrs.get("dt", 0.1)),
 
-            constraints=Constraints.from_hdf5(grp),
-            model=LinearSystem.from_hdf5(grp),
-            cost=LinearLSCost.from_hdf5(grp),
+            constraints=Constraints.from_hdf5(cfg_grp),
+            model=LinearSystem.from_hdf5(cfg_grp),
+            cost=LinearLSCost.from_hdf5(cfg_grp),
         )
 
     def to_hdf5(self, grp: h5py.Group) -> None:
@@ -200,9 +200,9 @@ class MPCConfig:
         cfg_grp.attrs["nu"] = int(self.nu)
         cfg_grp.attrs["dt"] = float(self.dt)
 
-        self.constraints.to_hdf5(grp)
-        self.model.to_hdf5(grp)
-        self.cost.to_hdf5(grp)
+        self.constraints.to_hdf5(cfg_grp)
+        self.model.to_hdf5(cfg_grp)
+        self.cost.to_hdf5(cfg_grp)
 
 
 @dataclass
@@ -231,14 +231,18 @@ class MPCTrajectory:
     @classmethod
     def from_hdf5(cls, grp: h5py.Group) -> "MPCTrajectory":
         """Load trajectory arrays from a trajectory group."""
+        traj_grp = grp.get("trajectory", None)
+        if traj_grp is None:
+            raise ValueError("No 'trajectory' group found in the provided HDF5 group.")
+        
         return cls(
-            states=grp["states"][:, :],
-            inputs=grp["inputs"][:, :],
-            time=grp["time"][:],
-            cost=grp["cost"][:],
-            predicted_states=grp["predicted_states"][:, :, :] if "predicted_states" in grp else None,
-            predicted_inputs=grp["predicted_inputs"][:, :, :] if "predicted_inputs" in grp else None,
-            feasible=bool(grp.attrs.get("feasible", True)),
+            states=traj_grp["states"][:, :],
+            inputs=traj_grp["inputs"][:, :],
+            time=traj_grp["time"][:],
+            cost=traj_grp["cost"][:],
+            predicted_states=traj_grp["predicted_states"][:, :, :] if "predicted_states" in traj_grp else None,
+            predicted_inputs=traj_grp["predicted_inputs"][:, :, :] if "predicted_inputs" in traj_grp else None,
+            feasible=bool(traj_grp.attrs.get("feasible", True)),
         )
 
     def to_hdf5(self, grp: h5py.Group, save_ocp_trajs: bool = True) -> None:
@@ -537,39 +541,53 @@ class MPCDataset:
             )
 
             # Determine effective constraints (Priority: function arg > dataset entry > None)
-            eff_x_bounds = x_bounds if x_bounds is not None else cfg.state_bounds
-            eff_u_bounds = u_bounds if u_bounds is not None else cfg.input_bounds
-            eff_goal = x_ref if x_ref is not None else cfg.x_ref
+            # State Constraints
+            if x_bounds is not None:
+                lbx = x_bounds[0]
+                ubx = x_bounds[1]
+            else:
+                lbx = cfg.constraints.lbx
+                ubx = cfg.constraints.ubx
 
-            eff_x_terminal_bounds = cfg.terminal_state_bounds
-            if eff_x_terminal_bounds is None:
-                eff_x_terminal_bounds = eff_x_bounds
-            
+            # Input Constraints
+            if u_bounds is not None:
+                lbu = u_bounds[0]
+                ubu = u_bounds[1]
+            else:
+                lbu = cfg.constraints.lbu
+                ubu = cfg.constraints.ubu
+
+            # Reference Goal
+            if x_ref is not None:
+                eff_goal = x_ref
+            else:
+                eff_goal = cfg.cost.yref_e if cfg.cost.has_terminal_cost() else None
+
             # Check Solver Feasibility
             solver_errors = [code for code in meta.status_codes if code != 0]
             solver_success = len(solver_errors) == 0
             
             # Check State Constraints
             state_violations = np.zeros(traj.states.shape[1], dtype=bool)
-            if eff_x_bounds is not None:
+            if lbx is not None and ubx is not None:
                 # Row 0: Lower bounds, Row 1: Upper bounds
-                lower_vio = np.any(traj.states[:-1] < (eff_x_bounds[0] - tol_constraints), axis=0)
-                upper_vio = np.any(traj.states[:-1] > (eff_x_bounds[1] + tol_constraints), axis=0)
+                lower_vio = np.any(traj.states[:-1] < (lbx - tol_constraints), axis=0)
+                upper_vio = np.any(traj.states[:-1] > (ubx + tol_constraints), axis=0)
                 state_violations = lower_vio | upper_vio
             
             # Check Terminal State Constraints
             terminal_state_violations = np.zeros(traj.states.shape[1], dtype=bool)
-            if eff_x_terminal_bounds is not None:
+            if cfg.constraints.lbx_e.size != 0 and cfg.constraints.ubx_e.size != 0:
                 # Row 0: Lower bounds, Row 1: Upper bounds
-                lower_vio = traj.states[-1] < (eff_x_terminal_bounds[0] - tol_constraints)
-                upper_vio = traj.states[-1] > (eff_x_terminal_bounds[1] + tol_constraints)
+                lower_vio = traj.states[-1] < (cfg.constraints.lbx_e - tol_constraints)
+                upper_vio = traj.states[-1] > (cfg.constraints.ubx_e + tol_constraints)
                 terminal_state_violations = lower_vio | upper_vio
                 
             # Check Input Constraints
             input_violations = np.zeros(traj.inputs.shape[1], dtype=bool)
-            if eff_u_bounds is not None:
-                lower_vio_u = np.any(traj.inputs < (eff_u_bounds[0] - tol_constraints), axis=0)
-                upper_vio_u = np.any(traj.inputs > (eff_u_bounds[1] + tol_constraints), axis=0)
+            if lbu is not None and ubu is not None:
+                lower_vio_u = np.any(traj.inputs < (lbu - tol_constraints), axis=0)
+                upper_vio_u = np.any(traj.inputs > (ubu + tol_constraints), axis=0)
                 input_violations = lower_vio_u | upper_vio_u
 
             all_constraints_met = not (

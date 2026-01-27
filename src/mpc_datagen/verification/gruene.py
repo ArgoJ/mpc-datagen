@@ -40,9 +40,9 @@ def grune_required_horizon_and_alpha(*, gamma: float, N: int) -> tuple[int, floa
 
     ratio = gamma / eps
     log_ratio = np.log(ratio)
-    den = np.expm1(float(N) * float(log_ratio))
+    den = np.expm1(float(N-1) * float(log_ratio))
     if (not np.isfinite(den)) or (den <= 0.0):
         return N_required, float("nan")
 
-    alpha_N = float(1.0 - 1.0 / den)
+    alpha_N = float(1.0 - eps / den)
     return N_required, alpha_N

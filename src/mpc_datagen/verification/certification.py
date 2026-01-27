@@ -682,7 +682,7 @@ class StabilityCertifier:
             is_stable=False,
             message="Not evaluated.",
         )
-        if (Qf is None) and (cer.cfg.terminal_state_bounds is None):
+        if (Qf is None) and (cer.cfg.constraints.has_terminal_state_bounds() is None):
             try:
                 grune_cert_rep = certify_linear_mpc_grune_no_terminal(
                     A=cer.sys.A,

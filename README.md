@@ -75,12 +75,11 @@ Layout of one entry:
 
 ### Lyapunov Decrease
 
-
+...
 
 ### Grüne Condition
 
-$$N_{req}(\gamma) = 2 + \frac{\log(\gamma - 1)}{\log(1 + \frac{1}{\gamma - 1})}$$
-where $N_{req}(\gamma)$ is rounded up to the next integer and at least 2.
+$$N_{req}(\gamma) \gt 2 + \frac{\log(\gamma - 1)}{\log(1 + \frac{1}{\gamma - 1})}$$
 
 $$\alpha_N = 1 - \frac{1}{(\gamma / (\gamma - 1))^N - 1}$$
 
