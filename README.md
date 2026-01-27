@@ -79,9 +79,9 @@ Layout of one entry:
 
 ### Grüne Condition
 
-$$N_{req}(\gamma) \gt 2 + \frac{\log(\gamma - 1)}{\log(1 + \frac{1}{\gamma - 1})}$$
+$$N_{req}(\gamma) \gt 2 + \frac{\ln(\gamma - 1)}{\ln(\gamma) - \ln(\gamma - 1)}$$
 
-$$\alpha_N = 1 - \frac{1}{(\gamma / (\gamma - 1))^N - 1}$$
+$$\alpha_N = 1 - \frac{(\gamma - 1)^N}{\gamma^{N-1} - (\gamma - 1)^{N-1}}$$
 
 
 ## Closed-loop solve
