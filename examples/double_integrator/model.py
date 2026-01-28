@@ -228,6 +228,7 @@ if __name__ == "__main__":
             T_sim=T_sim,
             verbose=True,
             reset_solver=True,
+            break_on=BreakOn.INFEASIBLE,
         )
         dataset = generator.generate(n_samples=n_samples)
         dataset.validate()

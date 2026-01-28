@@ -4,7 +4,7 @@ from acados_template import AcadosOcpSolver
 from tqdm import tqdm
 from dataclasses import replace
 
-from .mpc_solve import solve_mpc_closed_loop
+from .mpc_solve import solve_mpc_closed_loop, BreakOn
 from ..extractor import MPCConfigExtractor
 from ..mpc_data import MPCDataset
 from ..package_logger import PackageLogger, DEFAULT_MODULE_NAME
@@ -18,7 +18,7 @@ class MPCDataGenerator:
         solver: AcadosOcpSolver,
         x0_bounds: np.ndarray,
         T_sim: int,
-        break_on_infeasible: bool = True,
+        break_on: BreakOn = BreakOn.INFEASIBLE,
         seed: Optional[int] = None,
         verbose: bool = True,
         bound_type: str = "absolute",
@@ -37,8 +37,8 @@ class MPCDataGenerator:
             state bounds toward their midpoint.
         T_sim : int
             Number of simulation steps per trajectory.
-        break_on_infeasible : bool
-            Whether to stop simulation if the solver fails.
+        break_on : BreakOn
+            Condition to stop simulation if the solver fails.
         seed : int, optional
             Random seed for reproducibility.
         verbose : bool
@@ -50,7 +50,7 @@ class MPCDataGenerator:
             If True, resets the solver states to zero before each simulation.
         """
         self.solver = solver
-        self.break_on_infeasible = break_on_infeasible
+        self.break_on = break_on
         self.verbose = verbose
         self.reset_solver = reset_solver
         self.bound_type = bound_type
@@ -134,7 +134,7 @@ class MPCDataGenerator:
                 mpc_data = solve_mpc_closed_loop(
                     solver=self.solver,
                     cfg=temp_cfg,
-                    break_on_infeasible=self.break_on_infeasible
+                    break_on=self.break_on
                 )
 
                 dataset.add(mpc_data)

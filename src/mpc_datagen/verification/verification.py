@@ -6,7 +6,7 @@ from acados_template import AcadosOcpSolver
 from .reports import *
 from .gruene import grune_required_horizon_and_alpha
 from ..extractor import MPCConfigExtractor, LinearSystemExtractor
-from ..mpc_data import MPCData, MPCDataset
+from ..mpc_data import MPCData, MPCDataset, MPCConfig, MPCMeta, MPCTrajectory, LinearSystem
 from ..package_logger import PackageLogger
 
 
@@ -33,26 +33,22 @@ class StabilityVerifier:
             The Acados OCP solver instance used for linear stability verification.
         """
         self.dataset = dataset
-        
-        # Extract Dimensions and Horizon
-        self._use_recomputed_value: bool = False
 
         # Bindable entry 
         self._active_entry: Optional[MPCData] = None
-        self.traj = None
-        self.meta = None
-        self.valid = False
+        self.traj : Optional[MPCTrajectory] = None
+        self.meta : Optional[MPCMeta] = None
+        self.valid : Optional[bool] = False
         
-        self.cfg = None
-        self.sys = None
+        self.cfg: Optional[MPCConfig] = None
+        self.sys: Optional[LinearSystem] = None
         if isinstance(solver, AcadosOcpSolver):
             self.cfg = MPCConfigExtractor.get_cfg(solver)
             self.cfg.T_sim = dataset[0].config.T_sim
             self.sys = LinearSystemExtractor.get_system(solver)
         else:
             raise NotImplementedError(
-                "StabilityVerifier currently only supports verification with AcadosOcpSolver instances."
-            )
+                "StabilityVerifier currently only supports verification with AcadosOcpSolver instances.")
 
     def __getitem__(self, index: int) -> MPCData:
         return self.dataset[index]
@@ -133,74 +129,17 @@ class StabilityVerifier:
                 f"Entry ID {getattr(self.meta, 'id', 'unknown')} missing stored cost; cannot verify Lyapunov decrease."
             )
             return False
-
-        if self.traj.predicted_states is None or self.traj.predicted_inputs is None:
-            __logger__.warning(
-                f"Entry ID {getattr(self.meta, 'id', 'unknown')} missing OCP predictions (solved_states/solved_inputs); "
-                "using stored cost for verification."
-            )
-            self._use_recomputed_value = False
-            return True
-
-        self._use_recomputed_value = False
-        self._audit_value_function()
         return True
-
-    def _audit_value_function(self, max_steps: int = 3, rtol: float = 1e-3, atol: float = 1e-6) -> None:
-        """Compare stored traj.cost with recomputed V_N from OCP predictions."""
-        self._require_bound_entry()
-        if self.traj.predicted_states is None or self.traj.predicted_inputs is None:
-            return
-
-        T_sim = min(self.cfg.T_sim, int(self.traj.costs.shape[0]))
-        n_check = min(int(max_steps), max(0, T_sim))
-        if n_check <= 0:
-            return
-
-        mismatch_count = 0
-        error_sum = 0.0
-        for n in range(n_check):
-            stored = float(self.traj.costs[n])
-            if not np.isfinite(stored):
-                continue
-
-            # Compare against the recomputation using the currently extracted scaling conventions.
-            recomputed = float(self._V_from_predictions(n))
-            if not np.isfinite(recomputed):
-                continue
-            if not np.isclose(stored, recomputed, rtol=rtol, atol=atol):
-                mismatch_count += 1
-            error_sum += float(abs(stored - recomputed))
-
-        if mismatch_count > 0:
-            self._use_recomputed_value = True
-            __logger__.warning(
-                f"Detected {mismatch_count} mismatches between stored cost and recomputed V_N from predictions, "
-                f"avg_abs_error={error_sum/max(1, n_check):.3e}); switching to recomputed V_N for verification."
-            )
 
 
     # --- COST CALCULATIONS ---
-    def _stage_cost(self, x: np.ndarray, u: np.ndarray) -> float:
-        """Raw LINEAR_LS stage cost without any global prefactors."""
-        x = np.asarray(x, dtype=float).reshape(-1)
-        u = np.asarray(u, dtype=float).reshape(-1)
-        y = self.cfg.cost.Vx @ x + self.cfg.cost.Vu @ u
-        e = (y - self.cfg.cost.yref).reshape(-1)
-        return 0.5 * float(e.T @ self.cfg.cost.W @ e)
+    def _V(self, step_index: int) -> float:
+        """Get V_N(x_step) using the selected value-function source."""
+        self._require_bound_entry()
+        if step_index < 0 or step_index >= len(self.traj.costs):
+            raise IndexError(f"Step index {step_index} out of range for trajectory costs.")
+        return float(self.traj.costs[step_index])
 
-    def _terminal_cost(self, x: np.ndarray) -> float:
-        """Raw LINEAR_LS terminal cost without any global prefactors."""
-        if self.cfg.cost.W_e is None:
-            return 0.0
-        x = np.asarray(x, dtype=float).reshape(-1)
-
-        Vx_e = self.cfg.cost.Vx_e if self.cfg.cost.Vx_e is not None else np.eye(x.size)
-        yref_e = self.cfg.cost.yref_e if self.cfg.cost.yref_e is not None else np.zeros((Vx_e.shape[0],), dtype=float)
-        y_e = Vx_e @ x
-        e = (y_e - yref_e).reshape(-1)
-        return 0.5 * float(e.T @ self.cfg.cost.W_e @ e)
-    
     def _l_star(self, x: np.ndarray) -> float:
         """Lower bound on l*(x) := min_u l(x,u) via unconstrained minimization.
 
@@ -222,33 +161,7 @@ class StabilityVerifier:
         except np.linalg.LinAlgError:
             u_star = -np.linalg.lstsq(H, g, rcond=None)[0]
 
-        return float(self._stage_cost(x, u_star))
-
-    def _V_from_predictions(self, step_index: int) -> float:
-        """Recompute V_N(x) from stored OCP predictions at a simulation step."""
-        self._require_bound_entry()
-        if self.traj.predicted_states is None or self.traj.predicted_inputs is None:
-            raise ValueError("Missing OCP predictions for V_N recomputation.")
-
-        x_pred = np.asarray(self.traj.predicted_states[step_index], dtype=float)
-        u_pred = np.asarray(self.traj.predicted_inputs[step_index], dtype=float)
-        if x_pred.shape[0] - 1 != u_pred.shape[0]:
-            raise ValueError("Predicted trajectory shapes do not match horizon.")
-
-
-        total = 0.0
-        for k in range(self.cfg.N):
-            # Stage cost as in acados with dt scaled
-            total += self.cfg.dt * float(self._stage_cost(x_pred[k], u_pred[k]))
-        total += float(self._terminal_cost(x_pred[self.cfg.N]))
-        return float(total)
-
-    def _V(self, step_index: int) -> float:
-        """Get V_N(x_step) using the selected value-function source."""
-        self._require_bound_entry()
-        if self._use_recomputed_value:
-            return float(self._V_from_predictions(step_index))
-        return float(self.traj.costs[step_index])
+        return float(self.cfg.cost.get_stage_cost(x, u_star))
 
 
     # --- DATASET ITERATORS ---
@@ -317,8 +230,7 @@ class StabilityVerifier:
                 continue
 
             # Stage-cost scaling must match the value-function scaling used in V_N.
-            l_unscaled = self._stage_cost(self.traj.states[n], self.traj.inputs[n])
-            l_curr = self.cfg.dt * float(l_unscaled)
+            l_curr = self.cfg.cost.get_stage_cost(self.traj.states[n], self.traj.inputs[n])
 
             if not np.isfinite(l_curr) or l_curr <= min_cost_threshold:
                 # Near-equilibrium regime: alpha_obs is ill-conditioned, but we still want to
@@ -427,8 +339,7 @@ class StabilityVerifier:
                 continue
 
             # l*(x) := min_u l(x,u)
-            lstar_unscaled = float(self._l_star(x))
-            lstar = self.cfg.dt * lstar_unscaled
+            lstar = float(self._l_star(x))
 
             if (not np.isfinite(lstar)) or (lstar <= min_cost_threshold):
                 __logger__.debug(f"Skipping step {n} due to small stage cost l(x,u)={lstar:.4e} <= tol={min_cost_threshold:.4e}")

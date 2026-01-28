@@ -11,12 +11,14 @@ from .package_logger import PackageLogger
 
 __logger__ = PackageLogger.get_logger(__name__)
 
-def _is_defined_array(arr: Optional[np.ndarray]) -> bool:
+def _is_defined_array(arr: Optional[np.ndarray], not_zero: bool = True) -> bool:
     """Check if an array is defined and non-empty."""
     if arr is None:
         return False
     arr = np.asarray(arr)
     if arr.size == 0:
+        return False
+    if not_zero and np.allclose(arr, 0):
         return False
     return True 
 
@@ -80,10 +82,26 @@ class LinearLSCost:
     Vx_e: np.ndarray = field(default_factory=lambda: np.array([[]]))
     W_e: np.ndarray = field(default_factory=lambda: np.array([[]]))
     yref_e: np.ndarray = field(default_factory=lambda: np.array([[]]))
+    stage_scale: float = 1.0
+    terminal_scale: float = 1.0
+
+    def get_stage_cost(self, x: np.ndarray, u: np.ndarray, use_scaled: bool = False) -> float:
+        """Compute the cost for a given output vector y."""
+        y = self.Vx @ x + self.Vu @ u
+        e = y - self.yref
+        return 0.5 * float(e.T @ self.W @ e) * (self.stage_scale if use_scaled else 1.0)
+    
+    def get_terminal_cost(self, x: np.ndarray, use_scaled: bool = False) -> float:
+        """Compute the terminal cost for a given output vector y."""
+        if not self.has_terminal_cost():
+            return 0.0
+        y = self.Vx_e @ x
+        e = y - self.yref_e
+        return 0.5 * float(e.T @ self.W_e @ e) * (self.terminal_scale if use_scaled else 1.0)
 
     def has_terminal_cost(self) -> bool:
         """Check if terminal cost matrices are defined."""
-        return _is_defined_array(self.Vx_e) and _is_defined_array(self.W_e)
+        return _is_defined_array(self.Vx_e, not_zero=True) and _is_defined_array(self.W_e, not_zero=True)
 
     @classmethod
     def from_hdf5(cls, grp: h5py.Group) -> "LinearLSCost":
@@ -100,6 +118,8 @@ class LinearLSCost:
             Vx_e=cost_grp["Vx_e"][:] if "Vx_e" in cost_grp else np.array([]),
             W_e=cost_grp["W_e"][:] if "W_e" in cost_grp else np.array([]),
             yref_e=cost_grp["yref_e"][:] if "yref_e" in cost_grp else np.array([]),
+            stage_scale=cost_grp.attrs.get("stage_scale", 1.0),
+            terminal_scale=cost_grp.attrs.get("terminal_scale", 1.0),
         )
 
     def to_hdf5(self, grp: h5py.Group) -> None:
@@ -112,6 +132,8 @@ class LinearLSCost:
         cost_grp.create_dataset("Vx_e", data=self.Vx_e, compression="gzip")
         cost_grp.create_dataset("W_e", data=self.W_e, compression="gzip")
         cost_grp.create_dataset("yref_e", data=self.yref_e, compression="gzip")
+        cost_grp.attrs["stage_scale"] = float(self.stage_scale)
+        cost_grp.attrs["terminal_scale"] = float(self.terminal_scale)
 
 @dataclass
 class Constraints:
@@ -229,6 +251,30 @@ class MPCTrajectory:
         if self.predicted_states is not None:
             return self.predicted_states.shape[1] - 1
         return None
+    
+    def get_scaled_costs(self, stage_scale: float, terminal_scale: float = 1.0) -> np.ndarray:
+        """
+        Calculate scaled costs for each trajectory.
+        
+        Parameters
+        ----------
+        stage_scale, terminal_scale : float
+            Scaling factors for stage and terminal costs respectively.
+
+        Returns
+        -------
+        scaled_costs : np.ndarray
+            The scaled total costs for each trajectory. (shape: (T_sim,))
+        """
+        if self.horizon_costs is None:
+            raise ValueError("No horizon costs available to scale. Call 'recalculate_costs()' first.")
+
+        scaled_costs = self.horizon_costs.copy()
+        scaled_costs[:, :-1] *= stage_scale  # Scale stage costs
+        scaled_costs[:, -1] *= terminal_scale  # Scale terminal costs
+        
+        scaled_costs = scaled_costs.sum(axis=1)
+        return scaled_costs
 
     def recalculate_costs(self, cost: LinearLSCost) -> None:
         """
@@ -252,36 +298,27 @@ class MPCTrajectory:
         # Dimensions
         T_sim = self.predicted_states.shape[0]
         N = self.predicted_inputs.shape[1]
-        
+
         # Initialize arrays            
-        self.costs = np.zeros(T_sim)
-        self.horizon_costs = np.zeros((T_sim, N))
+        self.costs = np.full(T_sim, np.nan)
+        self.horizon_costs = np.full((T_sim, N+1), np.nan)
+
         # Calculation loop
         for i in range(T_sim):
-            current_V_N = 0.0
-            
-            # --- Iterate over the horizon (k=0 to N-1) ---
+
+            # Stage Cost
             for k in range(N):
                 x_k = self.predicted_states[i, k, :]
                 u_k = self.predicted_inputs[i, k, :]
-                
-                # Stage Cost
-                y_k = cost.Vx @ x_k + cost.Vu @ u_k
-                e = y_k - cost.yref
-                stage_cost = 0.5 * float(e.T @ cost.W @ e)
-                self.horizon_costs[i, k] = stage_cost
-                current_V_N += stage_cost
+                self.horizon_costs[i, k] = cost.get_stage_cost(x_k, u_k)
             
             # Terminal Cost
             if cost.Vx_e.size != 0 and cost.W_e.size != 0:
                 x_N = self.predicted_states[i, N, :]
-                y_N = cost.Vx_e @ x_N
-                e_N = y_N - cost.yref_e
-                term_cost = 0.5 * float(e_N.T @ cost.W_e @ e_N)
-                self.horizon_costs[i, N-1] += term_cost
-                current_V_N += term_cost
+                self.horizon_costs[i, N] = cost.get_terminal_cost(x_N)
             
-            self.costs[i] = current_V_N
+        # Total unscaled costs
+        self.costs = self.horizon_costs.sum(axis=1)
 
     @classmethod
     def from_hdf5(cls, grp: h5py.Group) -> "MPCTrajectory":
@@ -295,8 +332,8 @@ class MPCTrajectory:
             inputs=traj_grp["inputs"][:, :],
             times=traj_grp["times"][:],
             solver_costs=traj_grp["solver_costs"][:],
-            costs=traj_grp["costs"][:],
-            horizon_costs=traj_grp["horizon_costs"][:],
+            costs=traj_grp["costs"][:] if "costs" in traj_grp else None,
+            horizon_costs=traj_grp["horizon_costs"][:, :] if "horizon_costs" in traj_grp else None,
             predicted_states=traj_grp["predicted_states"][:, :, :] if "predicted_states" in traj_grp else None,
             predicted_inputs=traj_grp["predicted_inputs"][:, :, :] if "predicted_inputs" in traj_grp else None,
             feasible=bool(traj_grp.attrs.get("feasible", True)),
@@ -312,7 +349,7 @@ class MPCTrajectory:
 
         if self.costs is not None:
             traj_grp.create_dataset("costs", data=self.costs, compression="gzip")
-        if self.horizon_costs is not None:
+        if save_ocp_trajs and self.horizon_costs is not None:
             traj_grp.create_dataset("horizon_costs", data=self.horizon_costs, compression="gzip")
         if save_ocp_trajs and self.predicted_states is not None:
             traj_grp.create_dataset("predicted_states", data=self.predicted_states, compression="gzip")
@@ -359,7 +396,7 @@ class MPCTrajectory:
             states=states,
             inputs=inputs,
             times=times,
-            costs=costs,
+            solver_costs=costs,
             predicted_states=predicted_states,
             predicted_inputs=predicted_inputs,
             feasible=True
@@ -373,46 +410,49 @@ class MPCData:
     meta: MPCMeta = field(default_factory=MPCMeta)
     config: MPCConfig = field(default_factory=MPCConfig)
 
-    def verify(self) -> bool:
-        """Verify internal consistency of the data entry."""
+    def finalize(self, recalculate_costs: bool = False) -> bool:
+        """Finalizes the data entry, checking consistency and optionally recalculating costs."""
         T_sim = self.config.T_sim
-        nx = self.trajectory.states.shape[1]
-        nu = self.trajectory.inputs.shape[1]
-        N = self.config.N
+        traj = self.trajectory
+        nx = traj.states.shape[1]
+        nu = traj.inputs.shape[1]
 
-        if self.trajectory.states.shape != (T_sim + 1, nx):
-            __logger__.error(f"Trajectory states shape mismatch: expected {(T_sim + 1, nx)}, got {self.trajectory.states.shape}")
-            return False
-        if self.trajectory.inputs.shape != (T_sim, nu):
-            __logger__.error(f"Trajectory inputs shape mismatch: expected {(T_sim, nu)}, got {self.trajectory.inputs.shape}")
-            return False
-        if self.trajectory.times.shape != (T_sim + 1,):
-            __logger__.error(f"Trajectory times shape mismatch: expected {(T_sim + 1,)}, got {self.trajectory.times.shape}")
-            return False
-        if self.trajectory.solver_costs.shape != (T_sim,):
-            __logger__.error(f"Trajectory solver_costs shape mismatch: expected {(T_sim,)}, got {self.trajectory.solver_costs.shape}")
-            return False
-        if self.trajectory.predicted_states is not None:
-            if self.trajectory.predicted_states.shape != (T_sim, N+1, nx):
-                __logger__.error(f"Predicted states shape mismatch: expected {(T_sim, N+1, nx)}, got {self.trajectory.predicted_states.shape}")
-                return False
-        if self.trajectory.predicted_inputs is not None:
-            if self.trajectory.predicted_inputs.shape != (T_sim, N, nu):
-                __logger__.error(f"Predicted inputs shape mismatch: expected {(T_sim, N, nu)}, got {self.trajectory.predicted_inputs.shape}")
-                return False
+        if traj.states.shape != (T_sim + 1, nx):
+            raise ValueError(f"Trajectory states shape mismatch: expected {(T_sim + 1, nx)}, got {traj.states.shape}")
+        if traj.inputs.shape != (T_sim, nu):
+            raise ValueError(f"Trajectory inputs shape mismatch: expected {(T_sim, nu)}, got {traj.inputs.shape}")
+        if traj.times.shape != (T_sim + 1,):
+            raise ValueError(f"Trajectory times shape mismatch: expected {(T_sim + 1,)}, got {traj.times.shape}")
+        if traj.solver_costs.shape != (T_sim,):
+            raise ValueError(f"Trajectory solver_costs shape mismatch: expected {(T_sim,)}, got {traj.solver_costs.shape}")
         if len(self.meta.status_codes) != T_sim:
-            __logger__.error(f"Meta status codes length mismatch: expected {T_sim}, got {len(self.meta.status_codes)}")
-            return False
-        if not self.is_feasible() and self.trajectory.feasible:
-            self.trajectory.feasible = False
+            raise ValueError(f"Meta status codes length mismatch: expected {T_sim}, got {len(self.meta.status_codes)}")
+        if not self.is_feasible() and traj.feasible:
+            __logger__.warning(f"Entry marked as feasible, but solver status codes indicate infeasibility.")
+            traj.feasible = False
+            
+        # Optional arrays
+        N = self.config.N
+        if N != traj.horizon:
+            raise ValueError(f"Prediction horizon mismatch: config N={N}, trajectory horizon={traj.horizon}")
+        if traj.predicted_states is not None and traj.predicted_inputs is not None:
+            if traj.predicted_states.shape != (T_sim, N+1, nx):
+                raise ValueError(f"Predicted states shape mismatch: expected {(T_sim, N+1, nx)}, got {traj.predicted_states.shape}")
+            if traj.predicted_inputs.shape != (T_sim, N, nu):
+                raise ValueError(f"Predicted inputs shape mismatch: expected {(T_sim, N, nu)}, got {traj.predicted_inputs.shape}")
+            
+        if recalculate_costs:
+            traj.recalculate_costs(self.config.cost)
+            if traj.costs is not None:
+                if traj.costs.shape != (T_sim,):
+                    raise ValueError(f"Trajectory costs shape mismatch: expected {(T_sim,)}, got {traj.costs.shape}")
+            if traj.horizon_costs is not None:
+                if traj.horizon_costs.shape != (T_sim, N+1):
+                    raise ValueError(f"Trajectory horizon_costs shape mismatch: expected {(T_sim, N+1)}, got {traj.horizon_costs.shape}")
 
-        if self.trajectory.costs is not None and self.trajectory.costs.shape != (T_sim,):
-            __logger__.error(f"Trajectory costs shape mismatch: expected {(T_sim,)}, got {self.trajectory.costs.shape}")
-            return False
-        if self.trajectory.horizon_costs is not None and self.trajectory.horizon_costs.shape != (T_sim, N+1):
-            __logger__.error(f"Trajectory horizon_costs shape mismatch: expected {(T_sim,)}, got {self.trajectory.horizon_costs.shape}")
-            return False
-        return True
+            scaled_costs = traj.get_scaled_costs(stage_scale=self.config.cost.stage_scale, terminal_scale=self.config.cost.terminal_scale)
+            if not np.allclose(scaled_costs, traj.solver_costs, rtol=1e-3, atol=1e-6, equal_nan=True):
+                __logger__.warning(f"Recalculated scaled costs do not match stored costs.")
 
     def is_feasible(self) -> bool:
         """Check if the trajectory is feasible."""

@@ -1,13 +1,22 @@
 import time
 import logging
-from typing import Optional
 import numpy as np
+
+from typing import Optional
 from acados_template import AcadosOcpSolver, AcadosSimSolver
+from enum import IntEnum
 
 from ..mpc_data import MPCData, MPCTrajectory, MPCMeta, MPCConfig
 from ..extractor import MPCConfigExtractor
 
 __logger__ = logging.getLogger(__name__)
+
+class BreakOn(IntEnum):
+    NONE = 0
+    INFEASIBLE = 1
+    UNBOUNDED = 2
+    IN_EPS = 3
+    ALL = 4
 
 
 def solve_mpc_closed_loop(
@@ -15,7 +24,7 @@ def solve_mpc_closed_loop(
     integrator: Optional[AcadosSimSolver] = None,
     cfg: Optional[MPCConfig] = None,
     T_sim: Optional[int] = None,
-    break_on_infeasible: bool = True
+    break_on: BreakOn = BreakOn.INFEASIBLE
 ) -> MPCData:
     """
     Simulates a closed-loop MPC run using an Acados solver.
@@ -30,8 +39,8 @@ def solve_mpc_closed_loop(
         Configuration dictionary to store in MPCData.
     T_sim : int, optional
         Number of simulation steps. If None, uses cfg.T_sim.
-    break_on_infeasible : bool
-        If True, stops simulation if the solver returns a non-zero status.
+    break_on : BreakOn
+        Condition to break the simulation loop.
 
     Returns
     -------
@@ -69,7 +78,7 @@ def solve_mpc_closed_loop(
         status_codes.append(status)
         
         if status != 0:
-            if break_on_infeasible:
+            if break_on in (BreakOn.INFEASIBLE, BreakOn.ALL) and status == 1:
                 __logger__.warning(f"Solver failed at step {i} with status {status}. Stopping.")
                 is_feasible_run = False
                 break
@@ -88,7 +97,7 @@ def solve_mpc_closed_loop(
         # Store predictions
         traj.predicted_states[i, :, :] = pred_x
         traj.predicted_inputs[i, :, :] = pred_u
-        traj.costs[i] = solver.get_cost()
+        traj.solver_costs[i] = solver.get_cost()
         
         # Apply Control
         u_applied = pred_u[0, :].flatten()
@@ -124,9 +133,11 @@ def solve_mpc_closed_loop(
         steps_simulated=len(status_codes),
         status_codes=status_codes
     )
-        
-    return MPCData(
+    
+    data = MPCData(
         config=cfg,
         trajectory=traj,
         meta=meta
     )
+    data.finalize(recalculate_costs=True)
+    return data

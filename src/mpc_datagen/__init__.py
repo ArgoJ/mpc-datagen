@@ -1,4 +1,4 @@
-from .generation import MPCDataGenerator, solve_mpc_closed_loop
+from .generation import MPCDataGenerator, solve_mpc_closed_loop, BreakOn
 from .mpc_data import MPCData, MPCDataset, MPCConfig, MPCMeta, MPCTrajectory
 from .package_logger import PackageLogger
 
@@ -12,4 +12,5 @@ __all__ = [
     "MPCMeta",
     "MPCTrajectory",
     "solve_mpc_closed_loop",
+    "BreakOn",
 ]

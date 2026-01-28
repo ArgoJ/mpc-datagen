@@ -677,12 +677,7 @@ class StabilityCertifier:
             )
 
         # Optional: Grüne no-terminal certificate for problems without terminal ingredients.
-        grune_cert_rep = GruneNoTerminalCertificateReport(
-            applicability=False,
-            is_stable=False,
-            message="Not evaluated.",
-        )
-        if (Qf is None) and (cer.cfg.constraints.has_terminal_state_bounds() is None):
+        if (Qf is None) and (not cer.cfg.constraints.has_terminal_state_bounds()):
             try:
                 grune_cert_rep = certify_linear_mpc_grune_no_terminal(
                     A=cer.sys.A,
@@ -701,6 +696,12 @@ class StabilityCertifier:
                     is_stable=False,
                     message=f"Not applicable: Grüne no-terminal certificate failed with error: {type(e).__name__}: {e}",
                 )
+        else:
+            grune_cert_rep = GruneNoTerminalCertificateReport(
+                applicability=False,
+                is_stable=False,
+                message="Not applicable: Qf or terminal state bounds present.",
+            )
 
         certified_terminal = bool(terminal_rep.applicability and terminal_rep.is_stable)
         certified_grune = bool(grune_cert_rep.applicability and grune_cert_rep.is_stable)

@@ -5,6 +5,9 @@ from acados_template import AcadosOcpSolver
 
 from .mpc_data import MPCConfig, LinearSystem
 from .linalg import discretize_and_linearize_rk4
+from .package_logger import PackageLogger
+
+__logger__ = PackageLogger.get_logger(__name__)
 
 
 # --- Helpers ---
@@ -174,6 +177,16 @@ class MPCConfigExtractor():
         self.cfg.cost.Vx_e = self.ocp.cost.Vx_e
         self.cfg.cost.W_e = self.ocp.cost.W_e
         self.cfg.cost.yref_e = self.ocp.cost.yref_e
+        
+        if self.ocp.solver_options.cost_scaling is not None \
+            and (not np.allclose(self.ocp.solver_options.cost_scaling[:-1], self.cfg.dt) \
+            or self.ocp.solver_options.cost_scaling[-1] != 1.0):
+            __logger__.warning(
+                "Cost scaling is not supported in this extractor. "
+                f"Using default stage_scale = {self.cfg.dt}, terminal_scale = 1.0. \n {self.ocp.solver_options.cost_scaling}")
+        
+        self.cfg.cost.stage_scale = self.cfg.dt
+        self.cfg.cost.terminal_scale = 1.0
 
     def _extract_constraints(self) -> None:
         """Extract full input bounds from acados indexed bounds."""
