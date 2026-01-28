@@ -240,9 +240,14 @@ class MPCTrajectory:
             Cost function parameters.
         """
         # Ensure predictions are present
-        if self.predicted_states is None or self.predicted_inputs is None \
-            or self.solver_costs.size == 0 :
+        if self.predicted_states is None or self.predicted_inputs is None:
             raise ValueError("No prediction data (predicted_states/inputs) available.")
+        if cost.Vu.size == 0 or cost.Vx.size == 0 or cost.W.size == 0:
+            raise ValueError("Cost matrices Vx, Vu, W must be defined.")
+        if cost.yref.size == 0:
+            raise ValueError("Cost reference yref must be defined.")
+        if cost.yref_e.size == 0 and cost.has_terminal_cost():
+            raise ValueError("Terminal cost reference yref_e must be defined if terminal cost is used.")
 
         # Dimensions
         T_sim = self.predicted_states.shape[0]
@@ -260,18 +265,20 @@ class MPCTrajectory:
                 x_k = self.predicted_states[i, k, :]
                 u_k = self.predicted_inputs[i, k, :]
                 
-                # Stage Cost: l(x,u) = x'Vx x + u'Vu u
-                # Note: If you have references (x_ref), you must use (x-xref)!
-                # Here we assume x'Vx x (regulation to the origin).
-                stage_cost = (x_k.T @ cost.Vx @ x_k) + (u_k.T @ cost.Vu @ u_k)
-                
+                # Stage Cost
+                y_k = cost.Vx @ x_k + cost.Vu @ u_k
+                e = y_k - cost.yref
+                stage_cost = 0.5 * float(e.T @ cost.W @ e)
                 self.horizon_costs[i, k] = stage_cost
                 current_V_N += stage_cost
             
-            # --- Terminal Cost (k=N) ---
-            if cost.P is not None:
+            # Terminal Cost
+            if cost.Vx_e.size != 0 and cost.W_e.size != 0:
                 x_N = self.predicted_states[i, N, :]
-                term_cost = (x_N.T @ cost.P @ x_N)
+                y_N = cost.Vx_e @ x_N
+                e_N = y_N - cost.yref_e
+                term_cost = 0.5 * float(e_N.T @ cost.W_e @ e_N)
+                self.horizon_costs[i, N-1] += term_cost
                 current_V_N += term_cost
             
             self.costs[i] = current_V_N
@@ -287,7 +294,9 @@ class MPCTrajectory:
             states=traj_grp["states"][:, :],
             inputs=traj_grp["inputs"][:, :],
             times=traj_grp["times"][:],
+            solver_costs=traj_grp["solver_costs"][:],
             costs=traj_grp["costs"][:],
+            horizon_costs=traj_grp["horizon_costs"][:],
             predicted_states=traj_grp["predicted_states"][:, :, :] if "predicted_states" in traj_grp else None,
             predicted_inputs=traj_grp["predicted_inputs"][:, :, :] if "predicted_inputs" in traj_grp else None,
             feasible=bool(traj_grp.attrs.get("feasible", True)),
@@ -299,8 +308,12 @@ class MPCTrajectory:
         traj_grp.create_dataset("states", data=self.states, compression="gzip")
         traj_grp.create_dataset("inputs", data=self.inputs, compression="gzip")
         traj_grp.create_dataset("times", data=self.times, compression="gzip")
-        traj_grp.create_dataset("costs", data=self.costs, compression="gzip")
+        traj_grp.create_dataset("solver_costs", data=self.solver_costs, compression="gzip")
 
+        if self.costs is not None:
+            traj_grp.create_dataset("costs", data=self.costs, compression="gzip")
+        if self.horizon_costs is not None:
+            traj_grp.create_dataset("horizon_costs", data=self.horizon_costs, compression="gzip")
         if save_ocp_trajs and self.predicted_states is not None:
             traj_grp.create_dataset("predicted_states", data=self.predicted_states, compression="gzip")
         if save_ocp_trajs and self.predicted_inputs is not None:
@@ -339,7 +352,7 @@ class MPCTrajectory:
         inputs = np.full((T_sim, nu), np.nan)
         times = np.arange(T_sim + 1) * dt
         costs = np.full((T_sim,), np.nan)
-        predicted_states = np.full((T_sim, N + 1, nx), np.nan)
+        predicted_states = np.full((T_sim, N+1, nx), np.nan)
         predicted_inputs = np.full((T_sim, N, nu), np.nan)
         
         return cls(
@@ -365,6 +378,7 @@ class MPCData:
         T_sim = self.config.T_sim
         nx = self.trajectory.states.shape[1]
         nu = self.trajectory.inputs.shape[1]
+        N = self.config.N
 
         if self.trajectory.states.shape != (T_sim + 1, nx):
             __logger__.error(f"Trajectory states shape mismatch: expected {(T_sim + 1, nx)}, got {self.trajectory.states.shape}")
@@ -375,16 +389,14 @@ class MPCData:
         if self.trajectory.times.shape != (T_sim + 1,):
             __logger__.error(f"Trajectory times shape mismatch: expected {(T_sim + 1,)}, got {self.trajectory.times.shape}")
             return False
-        if self.trajectory.costs.shape != (T_sim,):
-            __logger__.error(f"Trajectory costs shape mismatch: expected {(T_sim,)}, got {self.trajectory.costs.shape}")
+        if self.trajectory.solver_costs.shape != (T_sim,):
+            __logger__.error(f"Trajectory solver_costs shape mismatch: expected {(T_sim,)}, got {self.trajectory.solver_costs.shape}")
             return False
         if self.trajectory.predicted_states is not None:
-            N = self.config.N
-            if self.trajectory.predicted_states.shape != (T_sim, N + 1, nx):
-                __logger__.error(f"Predicted states shape mismatch: expected {(T_sim, N + 1, nx)}, got {self.trajectory.predicted_states.shape}")
+            if self.trajectory.predicted_states.shape != (T_sim, N+1, nx):
+                __logger__.error(f"Predicted states shape mismatch: expected {(T_sim, N+1, nx)}, got {self.trajectory.predicted_states.shape}")
                 return False
         if self.trajectory.predicted_inputs is not None:
-            N = self.config.N
             if self.trajectory.predicted_inputs.shape != (T_sim, N, nu):
                 __logger__.error(f"Predicted inputs shape mismatch: expected {(T_sim, N, nu)}, got {self.trajectory.predicted_inputs.shape}")
                 return False
@@ -393,6 +405,13 @@ class MPCData:
             return False
         if not self.is_feasible() and self.trajectory.feasible:
             self.trajectory.feasible = False
+
+        if self.trajectory.costs is not None and self.trajectory.costs.shape != (T_sim,):
+            __logger__.error(f"Trajectory costs shape mismatch: expected {(T_sim,)}, got {self.trajectory.costs.shape}")
+            return False
+        if self.trajectory.horizon_costs is not None and self.trajectory.horizon_costs.shape != (T_sim, N+1):
+            __logger__.error(f"Trajectory horizon_costs shape mismatch: expected {(T_sim,)}, got {self.trajectory.horizon_costs.shape}")
+            return False
         return True
 
     def is_feasible(self) -> bool:
@@ -410,9 +429,10 @@ class MPCData:
 
         # NaNs in key arrays indicate an invalid run
         t = self.trajectory
-        if np.isnan(t.states).any() or np.isnan(t.inputs).any() or np.isnan(t.costs).any():
+        if np.isnan(t.states).any() or np.isnan(t.inputs).any() or np.isnan(t.solver_costs).any():
             return False
         return True
+
 
 class MPCDataset:
     """
@@ -584,7 +604,7 @@ class MPCDataset:
             traj_has_nan = (
                 np.isnan(traj.states).any()
                 or np.isnan(traj.inputs).any()
-                or np.isnan(traj.costs).any()
+                or np.isnan(traj.solver_costs).any()
             )
 
             # Determine effective constraints (Priority: function arg > dataset entry > None)
