@@ -649,7 +649,7 @@ class MPCDataset:
 
             # Determine effective constraints (Priority: function arg > dataset entry > None)
             # State Constraints
-            if x_bounds is not None:
+            if _is_defined_array(x_bounds):
                 lbx = x_bounds[0]
                 ubx = x_bounds[1]
             else:
@@ -657,7 +657,7 @@ class MPCDataset:
                 ubx = cfg.constraints.ubx
 
             # Input Constraints
-            if u_bounds is not None:
+            if _is_defined_array(u_bounds):
                 lbu = u_bounds[0]
                 ubu = u_bounds[1]
             else:
@@ -665,7 +665,7 @@ class MPCDataset:
                 ubu = cfg.constraints.ubu
 
             # Reference Goal
-            if x_ref is not None:
+            if _is_defined_array(x_ref):
                 eff_goal = x_ref
             else:
                 eff_goal = cfg.cost.yref_e if cfg.cost.has_terminal_cost() else None
@@ -676,7 +676,7 @@ class MPCDataset:
             
             # Check State Constraints
             state_violations = np.zeros(traj.states.shape[1], dtype=bool)
-            if lbx is not None and ubx is not None:
+            if _is_defined_array(lbx) and _is_defined_array(ubx):
                 # Row 0: Lower bounds, Row 1: Upper bounds
                 lower_vio = np.any(traj.states[:-1] < (lbx - tol_constraints), axis=0)
                 upper_vio = np.any(traj.states[:-1] > (ubx + tol_constraints), axis=0)
@@ -684,7 +684,7 @@ class MPCDataset:
             
             # Check Terminal State Constraints
             terminal_state_violations = np.zeros(traj.states.shape[1], dtype=bool)
-            if cfg.constraints.lbx_e.size != 0 and cfg.constraints.ubx_e.size != 0:
+            if _is_defined_array(cfg.constraints.lbx_e) and _is_defined_array(cfg.constraints.ubx_e):
                 # Row 0: Lower bounds, Row 1: Upper bounds
                 lower_vio = traj.states[-1] < (cfg.constraints.lbx_e - tol_constraints)
                 upper_vio = traj.states[-1] > (cfg.constraints.ubx_e + tol_constraints)
@@ -692,7 +692,7 @@ class MPCDataset:
                 
             # Check Input Constraints
             input_violations = np.zeros(traj.inputs.shape[1], dtype=bool)
-            if lbu is not None and ubu is not None:
+            if _is_defined_array(lbu) and _is_defined_array(ubu):
                 lower_vio_u = np.any(traj.inputs < (lbu - tol_constraints), axis=0)
                 upper_vio_u = np.any(traj.inputs > (ubu + tol_constraints), axis=0)
                 input_violations = lower_vio_u | upper_vio_u

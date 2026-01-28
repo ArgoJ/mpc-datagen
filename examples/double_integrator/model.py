@@ -161,14 +161,11 @@ def get_ocp_solver(
         ocp.constraints.lbx_e = -hw * np.ones((nx,))
         ocp.constraints.ubx_e = hw * np.ones((nx,))
         ocp.constraints.idxbx_e = np.arange(nx)
-    elif terminal_mode == "equilibrium":
+    if terminal_mode == "equilibrium":
         # Exact equilibrium terminal constraint x(N) = 0.
         ocp.constraints.lbx_e = np.zeros((nx,))
         ocp.constraints.ubx_e = np.zeros((nx,))
         ocp.constraints.idxbx_e = np.arange(nx)
-    else:
-        # No terminal bounds.
-        pass
 
     solver = AcadosOcpSolver(ocp, json_file=f"{ocp.model.name}_ocp.json")
 
@@ -241,7 +238,10 @@ if __name__ == "__main__":
         VerificationRender(veri_stats).render()
         
         
-        subdataset = dataset[:min(50, n_samples)]
+        subdataset = dataset[:min(100, n_samples)]
+        mdg_plots.cost_decrease(
+            dataset=subdataset,
+            html_path=f"plots/double_integrator_{terminal_mode}_N{N}_cost_decrease.html",)
         mdg_plots.mpc_trajectories(
             dataset=subdataset,
             state_labels=["Position", "Velocity"],
@@ -252,6 +252,7 @@ if __name__ == "__main__":
             mdg_plots.lyapunov(
                 dataset=subdataset,
                 lyapunov_func=lambda x: x.T @ info["P"] @ x,
+                state_labels=["x", "v"],
                 plot_3d=True,
                 html_path=f"plots/double_integrator_{terminal_mode}_N{N}_lyapunov.html",)
         

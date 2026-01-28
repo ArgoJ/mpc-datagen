@@ -4,11 +4,16 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from typing import Callable
 
-from .mpc_data import MPCDataset
+from .mpc_data import MPCDataset, MPCTrajectory
 from .package_logger import PackageLogger
 
 __logger__ = PackageLogger.get_logger(__name__)
 
+
+COLORS = [
+    '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
+    '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf'
+]
 
 def mpc_trajectories(
     dataset: MPCDataset,
@@ -50,11 +55,6 @@ def mpc_trajectories(
         vertical_spacing=0.05
     )
 
-    colors = [
-        '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', 
-        '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf'
-    ]
-    
     prediction_indices = []
 
     # Plot states
@@ -62,7 +62,7 @@ def mpc_trajectories(
         row = i + 1
         for idx in range(len(dataset)):
             traj = dataset[idx].trajectory
-            color = colors[idx % len(colors)]
+            color = COLORS[idx % len(COLORS)]
             
             # Main Trajectory
             fig.add_trace(
@@ -119,7 +119,7 @@ def mpc_trajectories(
         row = plot_idx + 1
         for idx in range(len(dataset)):
             traj = dataset[idx].trajectory
-            color = colors[idx % len(colors)]
+            color = COLORS[idx % len(COLORS)]
             
             # Controls (Step plot)
             fig.add_trace(
@@ -201,7 +201,7 @@ def mpc_trajectories(
     
     if html_path is not None:
         os.makedirs(os.path.dirname(html_path), exist_ok=True)
-        fig.write_html(html_path)
+        fig.write_html(html_path, include_mathjax='cdn')
         __logger__.info(f"Trajectories plot saved to {html_path}.")
     else:   
         fig.show()
@@ -211,6 +211,7 @@ def lyapunov(
     dataset: MPCDataset,
     lyapunov_func: Callable[[np.ndarray], np.ndarray],
     state_indices: list = [0, 1],
+    state_labels: list = None,
     limits: list = None,
     resolution: int = 100,
     plot_3d: bool = False,
@@ -248,6 +249,11 @@ def lyapunov(
         raise ValueError("state_indices must contain exactly 2 indices.")
 
     idx_x, idx_y = state_indices
+    
+    if state_labels is None:
+        state_labels = [f"State {idx_x}", f"State {idx_y}"]
+    if len(state_labels) != 2:
+        raise ValueError("state_labels must contain exactly 2 labels.")
 
     # Determine limits if not provided
     if limits is None:
@@ -321,20 +327,11 @@ def lyapunov(
     trajectory_indices = []
     
     # Plot MPC Trajectories
-    colors = [
-        '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', 
-        '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf'
-    ]
-
     for idx in range(len(dataset)):
         traj = dataset[idx].trajectory
-        color = colors[idx % len(colors)]
+        color = COLORS[idx % len(COLORS)]
         
         if plot_3d:
-            # try:
-            #     v_traj = lyapunov_func(traj.states)
-            # except Exception:
-                # v_traj = np.array([lyapunov_func(s) for s in traj.states])
             v_traj = traj.costs
             
             if hasattr(v_traj, 'ndim') and v_traj.ndim > 1:
@@ -370,10 +367,10 @@ def lyapunov(
     # Layout Configuration
     if plot_3d:
         fig.update_layout(
-            title_text=f"Lyapunov Landscape 3D (States {idx_x} vs {idx_y})",
+            title_text=f"Lyapunov Landscape 3D ({state_labels[0]} vs {state_labels[1]})",
             scene=dict(
-                xaxis_title=f"State {idx_x}",
-                yaxis_title=f"State {idx_y}",
+                xaxis_title=state_labels[0],
+                yaxis_title=state_labels[1],
                 zaxis_title="V(x)",
             ),
             width=1000,
@@ -382,9 +379,9 @@ def lyapunov(
         )
     else:
         fig.update_layout(
-            title_text=f"Lyapunov Landscape (States {idx_x} vs {idx_y})",
-            xaxis_title=f"State {idx_x}",
-            yaxis_title=f"State {idx_y}",
+            title_text=f"Lyapunov Landscape ({state_labels[0]} vs {state_labels[1]})",
+            xaxis_title=state_labels[0],
+            yaxis_title=state_labels[1],
             yaxis=dict(
                 scaleanchor="x",
                 scaleratio=1,
@@ -417,7 +414,137 @@ def lyapunov(
 
     if html_path is not None:
         os.makedirs(os.path.dirname(html_path), exist_ok=True)
-        fig.write_html(html_path)
+        fig.write_html(html_path, include_mathjax='cdn')
         __logger__.info(f"Trajectories plot saved to {html_path}.")
     else:   
         fig.show()
+
+
+def cost_decrease(
+    dataset: MPCDataset,
+    html_path: str = None,
+) -> go.Figure:
+    """Plot Lyapunov-style one-step descent check.
+
+    For each trajectory entry, plots
+
+    $$\Delta V_n = V_{n+1} - V_n + \ell(x_n, u_n)$$
+
+    where $V_n$ is the MPC cost-to-go at time step $n$ (taken from the stored
+    per-step value function / objective), and $\ell(x_n,u_n)$ is the *single*
+    stage cost at time step $n$ along the closed-loop trajectory.
+
+    Visual interpretation: values above 0 violate the one-step descent
+    inequality $V(x_{n+1}) - V(x_n) \le -\ell(x_n,u_n)$.
+
+    Parameters
+    ----------
+    dataset : MPCDataset
+        The dataset containing trajectories to plot.
+    html_path : str, optional
+        If provided, saves the plot to the specified HTML file.
+
+    Returns
+    -------
+    fig : plotly.graph_objects.Figure
+        The resulting Plotly figure.
+    """
+    if len(dataset) == 0:
+        __logger__.warning("Dataset is empty.")
+        return go.Figure()
+
+    fig = go.Figure()
+
+    for entry in dataset:
+        traj = entry.trajectory
+        cost = entry.config.cost
+        id = entry.meta.id
+
+        if traj.costs is None:
+            try:
+                traj.recalculate_costs(cost)
+            except Exception as exc:
+                __logger__.warning(
+                    f"Entry {id} could not recalculate costs: {exc}."
+                )
+                continue
+
+        if traj.costs is None or np.all(np.isnan(traj.costs)):
+            __logger__.warning(f"Entry {id} has invalid costs; skipping.")
+            continue
+
+        if traj.horizon_costs is None:
+            __logger__.warning(f"Entry {id} missing horizon_costs; skipping.")
+            continue
+
+        num_steps = min(len(traj.costs) - 1, traj.inputs.shape[0], traj.states.shape[0] - 1)
+
+        if num_steps <= 0:
+            __logger__.warning(f"Entry {id} has insufficient steps; skipping.")
+            continue
+
+        deltas = np.full(num_steps, np.nan)
+
+        for n in range(num_steps):
+            x_n = traj.states[n]
+            u_n = traj.inputs[n]
+
+            if not (np.all(np.isfinite(x_n)) and np.all(np.isfinite(u_n))):
+                continue
+
+            l_n = cost.get_stage_cost(x_n, u_n)
+            deltas[n] = traj.costs[n + 1] - traj.costs[n] + l_n
+            
+
+        color = COLORS[id % len(COLORS)]
+
+        fig.add_trace(
+            go.Scatter(
+                x=np.arange(num_steps),
+                y=deltas,
+                mode='lines',
+                name=f'Run {id+1} - ΔV',
+                line=dict(color=color, width=2),
+                legendgroup=f'Run {id+1}',
+                showlegend=True
+            )
+        )
+
+    fig.add_trace(
+        go.Scatter(
+            x=[0, 1],
+            y=[0, 0],
+            mode='lines',
+            line=dict(color='black', width=1, dash='dash'),
+            showlegend=False,
+            hoverinfo='skip'
+        )
+    )
+
+    fig.update_layout(
+        title_text="One-step descent check",
+        xaxis_title=r"$n$",
+        yaxis_title=r"$\Delta V$",
+        hovermode="x unified",
+        margin=dict(t=120),
+    )
+
+    fig.add_annotation(
+        text=r"$\Delta V = V_{n+1} - V_n + \ell(x_n,u_n)$",
+        xref="paper",
+        yref="paper",
+        x=0.005,
+        y=1.05,
+        showarrow=False,
+        font=dict(size=16),
+        align="center",
+    )
+
+    if html_path is not None:
+        os.makedirs(os.path.dirname(html_path), exist_ok=True)
+        fig.write_html(html_path, include_mathjax='cdn')
+        __logger__.info(f"Cost decrease plot saved to {html_path}.")
+    else:
+        fig.show()
+
+    return fig
