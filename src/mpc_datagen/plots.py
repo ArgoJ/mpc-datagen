@@ -67,7 +67,7 @@ def mpc_trajectories(
             # Main Trajectory
             fig.add_trace(
                 go.Scatter(
-                    x=traj.time, 
+                    x=traj.times, 
                     y=traj.states[:, i],
                     mode='lines',
                     name=f'Run {idx+1} - {state_labels[i]}',
@@ -79,7 +79,7 @@ def mpc_trajectories(
             )
             
             if plot_predictions and traj.solved_states is not None and not np.all(np.isnan(traj.solved_states)):
-                dt = traj.time[1] - traj.time[0] if len(traj.time) > 1 else 0.1
+                dt = traj.times[1] - traj.times[0] if len(traj.times) > 1 else 0.1
                 
                 # Consolidate prediction lines into one trace with None gaps for performance
                 x_lines = []
@@ -90,7 +90,7 @@ def mpc_trajectories(
                     if np.isnan(pred_state).all():
                         continue
                     
-                    t_start = traj.time[k]
+                    t_start = traj.times[k]
                     t_pred = t_start + np.arange(len(pred_state)) * dt
                     
                     x_lines.extend(t_pred)
@@ -124,7 +124,7 @@ def mpc_trajectories(
             # Controls (Step plot)
             fig.add_trace(
                 go.Scatter(
-                    x=traj.time[:-1],
+                    x=traj.times[:-1],
                     y=traj.inputs[:, i],
                     mode='lines',
                     line=dict(color=color, shape='hv'), # 'hv' for step-after behavior
@@ -136,7 +136,7 @@ def mpc_trajectories(
             )
             
             if plot_predictions and traj.solved_inputs is not None and not np.all(np.isnan(traj.solved_inputs)):
-                dt = traj.time[1] - traj.time[0] if len(traj.time) > 1 else 0.1
+                dt = traj.times[1] - traj.times[0] if len(traj.times) > 1 else 0.1
                 
                 x_lines = []
                 y_lines = []
@@ -146,7 +146,7 @@ def mpc_trajectories(
                     if np.isnan(pred_input).all():
                         continue
                     
-                    t_start = traj.time[k]
+                    t_start = traj.times[k]
                     t_pred = t_start + np.arange(len(pred_input)) * dt
                     
                     x_lines.extend(t_pred)
@@ -331,10 +331,11 @@ def lyapunov(
         color = colors[idx % len(colors)]
         
         if plot_3d:
-            try:
-                v_traj = lyapunov_func(traj.states)
-            except Exception:
-                v_traj = np.array([lyapunov_func(s) for s in traj.states])
+            # try:
+            #     v_traj = lyapunov_func(traj.states)
+            # except Exception:
+                # v_traj = np.array([lyapunov_func(s) for s in traj.states])
+            v_traj = traj.costs
             
             if hasattr(v_traj, 'ndim') and v_traj.ndim > 1:
                 v_traj = v_traj.flatten()

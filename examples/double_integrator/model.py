@@ -251,6 +251,7 @@ if __name__ == "__main__":
             mdg_plots.lyapunov(
                 dataset=subdataset,
                 lyapunov_func=lambda x: x.T @ info["P"] @ x,
+                plot_3d=True,
                 html_path=f"plots/double_integrator_{terminal_mode}_N{N}_lyapunov.html",)
         
 

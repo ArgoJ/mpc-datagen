@@ -128,7 +128,7 @@ class StabilityVerifier:
         """Check if OCP predictions (solved_states) are available for Lyapunov calculation."""
         self._require_bound_entry()
         # Empirical verification only requires stored value function and trajectories.
-        if self.traj.cost is None or len(self.traj.cost) == 0:
+        if self.traj.costs is None or len(self.traj.costs) == 0:
             __logger__.warning(
                 f"Entry ID {getattr(self.meta, 'id', 'unknown')} missing stored cost; cannot verify Lyapunov decrease."
             )
@@ -152,7 +152,7 @@ class StabilityVerifier:
         if self.traj.predicted_states is None or self.traj.predicted_inputs is None:
             return
 
-        T_sim = min(self.cfg.T_sim, int(self.traj.cost.shape[0]))
+        T_sim = min(self.cfg.T_sim, int(self.traj.costs.shape[0]))
         n_check = min(int(max_steps), max(0, T_sim))
         if n_check <= 0:
             return
@@ -160,7 +160,7 @@ class StabilityVerifier:
         mismatch_count = 0
         error_sum = 0.0
         for n in range(n_check):
-            stored = float(self.traj.cost[n])
+            stored = float(self.traj.costs[n])
             if not np.isfinite(stored):
                 continue
 
@@ -248,7 +248,7 @@ class StabilityVerifier:
         self._require_bound_entry()
         if self._use_recomputed_value:
             return float(self._V_from_predictions(step_index))
-        return float(self.traj.cost[step_index])
+        return float(self.traj.costs[step_index])
 
 
     # --- DATASET ITERATORS ---
@@ -308,7 +308,7 @@ class StabilityVerifier:
         min_residual = float("inf")
         n_used = 0
 
-        T_sim = min(self.cfg.T_sim, len(self.traj.states), len(self.traj.cost))
+        T_sim = min(self.cfg.T_sim, len(self.traj.states), len(self.traj.costs))
         for n in range(T_sim - 1):
             V_curr = self._V(n)
             V_next = self._V(n + 1)
@@ -414,7 +414,7 @@ class StabilityVerifier:
         """Estimate the maximum gamma value over the dataset."""
         gamma_values: List[float] = []
 
-        T_sim = min(self.cfg.T_sim, len(self.traj.states), len(self.traj.cost))
+        T_sim = min(self.cfg.T_sim, len(self.traj.states), len(self.traj.costs))
         for n in range(T_sim):
             x = np.asarray(self.traj.states[n], dtype=float)
             if not np.all(np.isfinite(x)):

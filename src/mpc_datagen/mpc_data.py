@@ -210,8 +210,10 @@ class MPCTrajectory:
     """The actual data resulting from a run."""
     states: np.ndarray          # (T, nx)
     inputs: np.ndarray          # (T, nu)
-    time: np.ndarray            # (T,)
-    cost: np.ndarray            # (T,)
+    times: np.ndarray           # (T,)
+    solver_costs: np.ndarray                        # (T,)
+    costs: Optional[np.ndarray] = None              # Shape (T,)
+    horizon_costs: Optional[np.ndarray] = None      # Shape (T, N+1)
     predicted_states: Optional[np.ndarray] = None   # (T, N+1, nx) - OCP predictions at each step
     predicted_inputs: Optional[np.ndarray] = None   # (T, N, nu)   - OCP predictions at each step
     feasible: bool = True
@@ -228,6 +230,52 @@ class MPCTrajectory:
             return self.predicted_states.shape[1] - 1
         return None
 
+    def recalculate_costs(self, cost: LinearLSCost) -> None:
+        """
+        Recalculates the discrete costs based on the predictions.
+        
+        Parameters
+        ----------
+        cost : LinearLSCost
+            Cost function parameters.
+        """
+        # Ensure predictions are present
+        if self.predicted_states is None or self.predicted_inputs is None \
+            or self.solver_costs.size == 0 :
+            raise ValueError("No prediction data (predicted_states/inputs) available.")
+
+        # Dimensions
+        T_sim = self.predicted_states.shape[0]
+        N = self.predicted_inputs.shape[1]
+        
+        # Initialize arrays            
+        self.costs = np.zeros(T_sim)
+        self.horizon_costs = np.zeros((T_sim, N))
+        # Calculation loop
+        for i in range(T_sim):
+            current_V_N = 0.0
+            
+            # --- Iterate over the horizon (k=0 to N-1) ---
+            for k in range(N):
+                x_k = self.predicted_states[i, k, :]
+                u_k = self.predicted_inputs[i, k, :]
+                
+                # Stage Cost: l(x,u) = x'Vx x + u'Vu u
+                # Note: If you have references (x_ref), you must use (x-xref)!
+                # Here we assume x'Vx x (regulation to the origin).
+                stage_cost = (x_k.T @ cost.Vx @ x_k) + (u_k.T @ cost.Vu @ u_k)
+                
+                self.horizon_costs[i, k] = stage_cost
+                current_V_N += stage_cost
+            
+            # --- Terminal Cost (k=N) ---
+            if cost.P is not None:
+                x_N = self.predicted_states[i, N, :]
+                term_cost = (x_N.T @ cost.P @ x_N)
+                current_V_N += term_cost
+            
+            self.costs[i] = current_V_N
+
     @classmethod
     def from_hdf5(cls, grp: h5py.Group) -> "MPCTrajectory":
         """Load trajectory arrays from a trajectory group."""
@@ -238,8 +286,8 @@ class MPCTrajectory:
         return cls(
             states=traj_grp["states"][:, :],
             inputs=traj_grp["inputs"][:, :],
-            time=traj_grp["time"][:],
-            cost=traj_grp["cost"][:],
+            times=traj_grp["times"][:],
+            costs=traj_grp["costs"][:],
             predicted_states=traj_grp["predicted_states"][:, :, :] if "predicted_states" in traj_grp else None,
             predicted_inputs=traj_grp["predicted_inputs"][:, :, :] if "predicted_inputs" in traj_grp else None,
             feasible=bool(traj_grp.attrs.get("feasible", True)),
@@ -250,8 +298,8 @@ class MPCTrajectory:
         traj_grp = grp.create_group("trajectory")
         traj_grp.create_dataset("states", data=self.states, compression="gzip")
         traj_grp.create_dataset("inputs", data=self.inputs, compression="gzip")
-        traj_grp.create_dataset("time", data=self.time, compression="gzip")
-        traj_grp.create_dataset("cost", data=self.cost, compression="gzip")
+        traj_grp.create_dataset("times", data=self.times, compression="gzip")
+        traj_grp.create_dataset("costs", data=self.costs, compression="gzip")
 
         if save_ocp_trajs and self.predicted_states is not None:
             traj_grp.create_dataset("predicted_states", data=self.predicted_states, compression="gzip")
@@ -289,16 +337,16 @@ class MPCTrajectory:
         """
         states = np.full((T_sim + 1, nx), np.nan)
         inputs = np.full((T_sim, nu), np.nan)
-        time = np.arange(T_sim + 1) * dt
-        cost = np.full((T_sim,), np.nan)
+        times = np.arange(T_sim + 1) * dt
+        costs = np.full((T_sim,), np.nan)
         predicted_states = np.full((T_sim, N + 1, nx), np.nan)
         predicted_inputs = np.full((T_sim, N, nu), np.nan)
         
         return cls(
             states=states,
             inputs=inputs,
-            time=time,
-            cost=cost,
+            times=times,
+            costs=costs,
             predicted_states=predicted_states,
             predicted_inputs=predicted_inputs,
             feasible=True
@@ -324,11 +372,11 @@ class MPCData:
         if self.trajectory.inputs.shape != (T_sim, nu):
             __logger__.error(f"Trajectory inputs shape mismatch: expected {(T_sim, nu)}, got {self.trajectory.inputs.shape}")
             return False
-        if self.trajectory.time.shape != (T_sim + 1,):
-            __logger__.error(f"Trajectory time shape mismatch: expected {(T_sim + 1,)}, got {self.trajectory.time.shape}")
+        if self.trajectory.times.shape != (T_sim + 1,):
+            __logger__.error(f"Trajectory times shape mismatch: expected {(T_sim + 1,)}, got {self.trajectory.times.shape}")
             return False
-        if self.trajectory.cost.shape != (T_sim,):
-            __logger__.error(f"Trajectory cost shape mismatch: expected {(T_sim,)}, got {self.trajectory.cost.shape}")
+        if self.trajectory.costs.shape != (T_sim,):
+            __logger__.error(f"Trajectory costs shape mismatch: expected {(T_sim,)}, got {self.trajectory.costs.shape}")
             return False
         if self.trajectory.predicted_states is not None:
             N = self.config.N
@@ -362,10 +410,9 @@ class MPCData:
 
         # NaNs in key arrays indicate an invalid run
         t = self.trajectory
-        if np.isnan(t.states).any() or np.isnan(t.inputs).any() or np.isnan(t.cost).any():
+        if np.isnan(t.states).any() or np.isnan(t.inputs).any() or np.isnan(t.costs).any():
             return False
         return True
-
 
 class MPCDataset:
     """
@@ -537,7 +584,7 @@ class MPCDataset:
             traj_has_nan = (
                 np.isnan(traj.states).any()
                 or np.isnan(traj.inputs).any()
-                or np.isnan(traj.cost).any()
+                or np.isnan(traj.costs).any()
             )
 
             # Determine effective constraints (Priority: function arg > dataset entry > None)
