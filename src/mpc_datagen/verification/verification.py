@@ -17,9 +17,6 @@ class StabilityVerifier:
     """
     A tool to rigorously check stability and performance properties of NMPC trajectories
     based on the optimal value function V_N as a Lyapunov function.
-    
-    Theory based on:
-    Lars Grüne, Nonlinear Model Predictive Control (2015)
     """
 
     def __init__(self, dataset: MPCDataset, solver: Optional[AcadosOcpSolver] = None):
@@ -100,7 +97,7 @@ class StabilityVerifier:
                 "Entry T_sim exceeds trajectory length. T_sim must be <= trajectory length."
                 f"{self.cfg.T_sim} > {self.traj.length}"
             )
-        if self.cfg.constraints.has_terminal_state_bounds() != local_cfg.constraints.has_terminal_state_bounds():
+        if self.cfg.constraints.has_bx_e() != local_cfg.constraints.has_bx_e():
             raise ValueError(
                 "Entry and solver terminal state_bounds do not match. "
                 "This verifier assumes terminal state_bounds for the entire dataset."
@@ -161,6 +158,18 @@ class StabilityVerifier:
         except np.linalg.LinAlgError:
             u_star = -np.linalg.lstsq(H, g, rcond=None)[0]
 
+        if not self.cfg.constraints.is_inside_bu(u_star):
+            __logger__.error(
+                "Unconstrained optimal control input u* is outside input bounds; "
+                "l*(x) lower bound may be conservative."
+            )
+            return 0.0
+        if not self.cfg.constraints.is_inside_bx(x):
+            __logger__.error(
+                "State x is outside state bounds; l*(x) lower bound may be invalid."
+            )
+            return 0.0
+
         return float(self.cfg.cost.get_stage_cost(x, u_star))
 
 
@@ -204,9 +213,9 @@ class StabilityVerifier:
         Parameters
         ----------
         alpha_required : float
-            Minimum empirical alpha required for certification.
+            Minimum empirical threshold required for verification.
         min_cost_threshold : float
-            Minimum stage cost to consider for certification.
+            Minimum stage cost to consider for verification.
 
         Returns
         -------
@@ -270,15 +279,15 @@ class StabilityVerifier:
             n_used=int(n_used))
 
     def lyapunov_decrease(self, alpha_required: float = 1e-3, min_cost_threshold: float = 1e-6) -> LyapunovDecreaseReport:
-        """Dataset-level empirical Lyapunov decrease certification.
+        """Dataset-level empirical Lyapunov decrease verification.
         Using the minimum observed alpha and maximum violation over all feasible trajectories.
 
         Parameters
         ----------
         alpha_required : float
-            Minimum empirical alpha required for certification.
+            Minimum empirical threshold required for verification.
         min_cost_threshold : float
-            Minimum stage cost to consider for certification.
+            Minimum stage cost to consider for verification.
 
         Returns
         -------
@@ -363,7 +372,7 @@ class StabilityVerifier:
         """
         cfg0 = self.dataset[0].config
         has_terminal_cost = cfg0.cost.has_terminal_cost()
-        has_terminal_bounds = cfg0.constraints.has_terminal_state_bounds()
+        has_terminal_bounds = cfg0.constraints.has_bx_e()
 
         if has_terminal_cost or has_terminal_bounds:
             return GrüneHorizonReport(

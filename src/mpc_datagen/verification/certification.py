@@ -677,7 +677,7 @@ class StabilityCertifier:
             )
 
         # Optional: Grüne no-terminal certificate for problems without terminal ingredients.
-        if (Qf is None) and (not cer.cfg.constraints.has_terminal_state_bounds()):
+        if (Qf is None) and (not cer.cfg.constraints.has_bx_e()):
             try:
                 grune_cert_rep = certify_linear_mpc_grune_no_terminal(
                     A=cer.sys.A,

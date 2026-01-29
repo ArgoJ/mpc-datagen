@@ -146,13 +146,35 @@ class Constraints:
     lbx_e: np.ndarray = field(default_factory=lambda: np.array([]))
     ubx_e: np.ndarray = field(default_factory=lambda: np.array([]))
 
-    def has_state_bounds(self) -> bool:
+    def has_bx(self) -> bool:
         """Check if state bounds are defined."""
         return _is_defined_array(self.lbx) and _is_defined_array(self.ubx)
 
-    def has_terminal_state_bounds(self) -> bool:
+    def has_bx_e(self) -> bool:
         """Check if terminal state bounds are defined."""
         return _is_defined_array(self.lbx_e) and _is_defined_array(self.ubx_e)
+
+    def has_bu(self) -> bool:
+        """Check if input bounds are defined."""
+        return _is_defined_array(self.lbu) and _is_defined_array(self.ubu)
+
+    def is_inside_bx(self, x: np.ndarray) -> bool:
+        """Check if a state is inside the defined state bounds."""
+        if not self.has_bx():
+            return True
+        return np.all(x >= self.lbx) and np.all(x <= self.ubx)
+
+    def is_inside_bx_e(self, x: np.ndarray) -> bool:
+        """Check if a state is inside the defined terminal state bounds."""
+        if not self.has_bx_e():
+            return True
+        return np.all(x >= self.lbx_e) and np.all(x <= self.ubx_e)
+
+    def is_inside_bu(self, u: np.ndarray) -> bool:
+        """Check if an input is inside the defined input bounds."""
+        if not self.has_bu():
+            return True
+        return np.all(u >= self.lbu) and np.all(u <= self.ubu)
 
     @classmethod
     def from_hdf5(cls, grp: h5py.Group) -> "Constraints":

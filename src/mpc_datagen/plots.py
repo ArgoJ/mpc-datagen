@@ -20,6 +20,7 @@ def mpc_trajectories(
     state_labels: list,
     control_labels: list,
     plot_predictions: bool = False,
+    time_bound: float = None,  
     html_path: str = None,
 ):
     """Plot MPC trajectories for states and controls using Plotly.
@@ -36,6 +37,8 @@ def mpc_trajectories(
         If True, plot the OCP predictions at each step. Default is False.
     html_path : str, optional
         If provided, saves the plot to the specified HTML file.
+    time_bound : float, optional
+        If provided, limits the x-axis to the specified time range [0, time_bound].
     """
     if len(dataset) == 0:
         __logger__.warning("Dataset is empty.")
@@ -174,6 +177,9 @@ def mpc_trajectories(
         title_text="MPC Trajectories",
         hovermode="x unified"
     )
+
+    if time_bound is not None:
+        fig.update_xaxes(range=[0, time_bound])
     
     if plot_predictions and prediction_indices:
         fig.update_layout(
@@ -216,6 +222,7 @@ def lyapunov(
     resolution: int = 100,
     plot_3d: bool = False,
     html_path: str = None,
+    use_optimal_v: bool = False,
 ):
     """Plot the Lyapunov function landscape and MPC trajectories in 2D or 3D.
     Only two state dimensions can be visualized at once.
@@ -332,17 +339,35 @@ def lyapunov(
         color = COLORS[idx % len(COLORS)]
         
         if plot_3d:
-            v_traj = traj.costs
-            
-            if hasattr(v_traj, 'ndim') and v_traj.ndim > 1:
-                v_traj = v_traj.flatten()
-            elif isinstance(v_traj, list):
-                v_traj = np.array(v_traj)
+            if use_optimal_v and traj.horizon_costs is not None:
+                v_traj = np.hstack([
+                    traj.horizon_costs,
+                    np.full((traj.horizon_costs.shape[0], 1), np.nan)])
+                x = np.hstack([
+                    traj.predicted_states[:, :, idx_x],
+                    np.full((traj.predicted_states.shape[0], 1), np.nan)])
+                y = np.hstack([
+                    traj.predicted_states[:, :, idx_y],
+                    np.full((traj.predicted_states.shape[0], 1), np.nan)])
+            else:
+                v_traj = traj.costs
+                x = traj.states[:, idx_x]
+                y = traj.states[:, idx_y]
+
+            v_traj = v_traj.flatten()
+            x = x.flatten()
+            y = y.flatten()
+
+            if v_traj.shape != x.shape or v_traj.shape != y.shape:
+                __logger__.warning(
+                    f"Trajectory {idx+1} cost shape {v_traj.shape} does not match state shape {x.shape}; skipping."
+                )
+                continue
 
             fig.add_trace(
                 go.Scatter3d(
-                    x=traj.states[:, idx_x],
-                    y=traj.states[:, idx_y],
+                    x=x,
+                    y=y,
                     z=v_traj,
                     mode='lines',
                     name=f'Run {idx+1}',
@@ -522,22 +547,14 @@ def cost_decrease(
     )
 
     fig.update_layout(
-        title_text="One-step descent check",
+        title_text=(
+            "One-step descent check: "
+            "&#916;V = V<sub>n+1</sub> - V<sub>n</sub> + &#8467;(x<sub>n</sub>,u<sub>n</sub>)"
+        ),
         xaxis_title=r"$n$",
         yaxis_title=r"$\Delta V$",
         hovermode="x unified",
         margin=dict(t=120),
-    )
-
-    fig.add_annotation(
-        text=r"$\Delta V = V_{n+1} - V_n + \ell(x_n,u_n)$",
-        xref="paper",
-        yref="paper",
-        x=0.005,
-        y=1.05,
-        showarrow=False,
-        font=dict(size=16),
-        align="center",
     )
 
     if html_path is not None:

@@ -137,8 +137,7 @@ def get_ocp_solver(
     if terminal_mode == "regional":
         ocp.cost.W_e = P
     else:
-        # For the "no terminal" scheme (and also for pure equilibrium terminal constraints),
-        # keep terminal weight at zero. Downstream code treats this as "no terminal cost".
+        # For "no terminal" scheme and for equilibrium terminal constraints,
         ocp.cost.W_e = np.zeros((nx, nx))
     ocp.cost.Vx_e = np.eye(nx)
     ocp.cost.yref_e = np.zeros((nx,))
@@ -206,12 +205,13 @@ if __name__ == "__main__":
         print(f"CASE: {name} (terminal_mode={terminal_mode}, N={N})")
         print("=" * 80)
 
+        dt = 0.1
         solver, info = get_ocp_solver(
             A_c,
             B_c,
             Q,
             R,
-            dt=0.1,
+            dt=dt,
             N=N,
             tol=1e-8,
             terminal_mode=terminal_mode,
@@ -246,6 +246,7 @@ if __name__ == "__main__":
             dataset=subdataset,
             state_labels=["Position", "Velocity"],
             control_labels=["Acceleration"],
+            time_bound=T_sim * dt,
             html_path=f"plots/double_integrator_{terminal_mode}_N{N}_trajectories.html",)
         
         if info["P"] is not None:
@@ -254,6 +255,7 @@ if __name__ == "__main__":
                 lyapunov_func=lambda x: x.T @ info["P"] @ x,
                 state_labels=["x", "v"],
                 plot_3d=True,
+                use_optimal_v=True,
                 html_path=f"plots/double_integrator_{terminal_mode}_N{N}_lyapunov.html",)
         
 
@@ -264,31 +266,31 @@ if __name__ == "__main__":
         N=20,
         x0_bounds=np.array([[-1.0, -1.0], [1.0, 1.0]]),
         T_sim=25,
-        n_samples=200,
+        n_samples=50,
         bounds_scale=10.0,
         terminal_box_halfwidth=1.0,
     )
 
     # Case 2: equilibrium terminal constraint x(N)=0 (sample close so feasibility is easy)
-    run_case(
-        name="Equilibrium terminal constraint",
-        terminal_mode="equilibrium",
-        N=25,
-        x0_bounds=np.array([[-0.5, -0.5], [0.5, 0.5]]),
-        T_sim=20,
-        n_samples=200,
-        bounds_scale=10.0,
-        terminal_box_halfwidth=1.0,
-    )
+    # run_case(
+    #     name="Equilibrium terminal constraint",
+    #     terminal_mode="equilibrium",
+    #     N=25,
+    #     x0_bounds=np.array([[-0.5, -0.5], [0.5, 0.5]]),
+    #     T_sim=25,
+    #     n_samples=50,
+    #     bounds_scale=10.0,
+    #     terminal_box_halfwidth=1.0,
+    # )
 
     # Case 3: no terminal ingredients (zero terminal weight, no terminal bounds)
-    run_case(
-        name="No terminal ingredients (Grüne horizon condition)",
-        terminal_mode="none",
-        N=40,
-        x0_bounds=np.array([[-1.0, -1.0], [1.0, 1.0]]),
-        T_sim=25,
-        n_samples=200,
-        bounds_scale=50.0,
-        terminal_box_halfwidth=1.0,
-    )
+    # run_case(
+    #     name="No terminal ingredients (Grüne horizon condition)",
+    #     terminal_mode="none",
+    #     N=40,
+    #     x0_bounds=np.array([[-1.0, -1.0], [1.0, 1.0]]),
+    #     T_sim=25,
+    #     n_samples=50,
+    #     bounds_scale=50.0,
+    #     terminal_box_halfwidth=1.0,
+    # )
