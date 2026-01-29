@@ -15,6 +15,13 @@ COLORS = [
     '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf'
 ]
 
+def _plotly_multiline(x: np.ndarray, axis: int=0):
+    if axis == 0:
+        return np.hstack([x, np.full((x.shape[0], 1), np.nan)])
+    elif axis == 1:
+        return np.vstack([x, np.full((x.shape[1], 1), np.nan)])
+
+
 def mpc_trajectories(
     dataset: MPCDataset,
     state_labels: list,
@@ -340,19 +347,13 @@ def lyapunov(
         
         if plot_3d:
             if use_optimal_v and traj.horizon_costs is not None:
-                v_traj = np.hstack([
-                    traj.horizon_costs,
-                    np.full((traj.horizon_costs.shape[0], 1), np.nan)])
-                x = np.hstack([
-                    traj.predicted_states[:, :, idx_x],
-                    np.full((traj.predicted_states.shape[0], 1), np.nan)])
-                y = np.hstack([
-                    traj.predicted_states[:, :, idx_y],
-                    np.full((traj.predicted_states.shape[0], 1), np.nan)])
+                v_traj = _plotly_multiline(traj.horizon_costs)
+                x = _plotly_multiline(traj.predicted_states[:, :, idx_x])
+                y = _plotly_multiline(traj.predicted_states[:, :, idx_y])
             else:
                 v_traj = traj.costs
-                x = traj.states[:, idx_x]
-                y = traj.states[:, idx_y]
+                x = traj.states[:-1, idx_x]
+                y = traj.states[:-1, idx_y]
 
             v_traj = v_traj.flatten()
             x = x.flatten()
@@ -565,3 +566,4 @@ def cost_decrease(
         fig.show()
 
     return fig
+

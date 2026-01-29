@@ -252,10 +252,10 @@ if __name__ == "__main__":
         if info["P"] is not None:
             mdg_plots.lyapunov(
                 dataset=subdataset,
-                lyapunov_func=lambda x: x.T @ info["P"] @ x,
+                lyapunov_func=lambda x: 0.5 * x.T @ info["P"] @ x,
                 state_labels=["x", "v"],
                 plot_3d=True,
-                use_optimal_v=True,
+                use_optimal_v=False,
                 html_path=f"plots/double_integrator_{terminal_mode}_N{N}_lyapunov.html",)
         
 
