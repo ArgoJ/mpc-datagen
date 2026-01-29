@@ -256,8 +256,8 @@ class MPCTrajectory:
     inputs: np.ndarray          # (T, nu)
     times: np.ndarray           # (T,)
     solver_costs: np.ndarray                        # (T,)
-    costs: Optional[np.ndarray] = None              # Shape (T,)
-    horizon_costs: Optional[np.ndarray] = None      # Shape (T, N+1)
+    costs: Optional[np.ndarray] = None              # (T,)
+    horizon_costs: Optional[np.ndarray] = None      # (T, N+1)
     predicted_states: Optional[np.ndarray] = None   # (T, N+1, nx) - OCP predictions at each step
     predicted_inputs: Optional[np.ndarray] = None   # (T, N, nu)   - OCP predictions at each step
     feasible: bool = True

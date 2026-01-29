@@ -27,7 +27,7 @@ def main() -> None:
     if len(dataset) == 0:
         raise ValueError(f"Dataset is empty: {args.dataset}")
 
-    mdg_plots.cost_decrease(
+    mdg_plots.relaxed_dp_residual(
         dataset=dataset[:5],
         html_path=str(args.html) if args.html is not None else None,
     )

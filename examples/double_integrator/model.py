@@ -239,9 +239,12 @@ if __name__ == "__main__":
         
         
         subdataset = dataset[:min(100, n_samples)]
-        mdg_plots.cost_decrease(
+        mdg_plots.relaxed_dp_residual(
             dataset=subdataset,
-            html_path=f"plots/double_integrator_{terminal_mode}_N{N}_cost_decrease.html",)
+            html_path=f"plots/double_integrator_{terminal_mode}_N{N}_relaxed_dp_res.html",)
+        mdg_plots.cost_descent(
+            dataset=subdataset,
+            html_path=f"plots/double_integrator_{terminal_mode}_N{N}_cost_descent.html",)
         mdg_plots.mpc_trajectories(
             dataset=subdataset,
             state_labels=["Position", "Velocity"],
@@ -272,25 +275,25 @@ if __name__ == "__main__":
     )
 
     # Case 2: equilibrium terminal constraint x(N)=0 (sample close so feasibility is easy)
-    # run_case(
-    #     name="Equilibrium terminal constraint",
-    #     terminal_mode="equilibrium",
-    #     N=25,
-    #     x0_bounds=np.array([[-0.5, -0.5], [0.5, 0.5]]),
-    #     T_sim=25,
-    #     n_samples=50,
-    #     bounds_scale=10.0,
-    #     terminal_box_halfwidth=1.0,
-    # )
+    run_case(
+        name="Equilibrium terminal constraint",
+        terminal_mode="equilibrium",
+        N=25,
+        x0_bounds=np.array([[-0.5, -0.5], [0.5, 0.5]]),
+        T_sim=25,
+        n_samples=50,
+        bounds_scale=10.0,
+        terminal_box_halfwidth=1.0,
+    )
 
     # Case 3: no terminal ingredients (zero terminal weight, no terminal bounds)
-    # run_case(
-    #     name="No terminal ingredients (Grüne horizon condition)",
-    #     terminal_mode="none",
-    #     N=40,
-    #     x0_bounds=np.array([[-1.0, -1.0], [1.0, 1.0]]),
-    #     T_sim=25,
-    #     n_samples=50,
-    #     bounds_scale=50.0,
-    #     terminal_box_halfwidth=1.0,
-    # )
+    run_case(
+        name="No terminal ingredients (Grüne horizon condition)",
+        terminal_mode="none",
+        N=40,
+        x0_bounds=np.array([[-1.0, -1.0], [1.0, 1.0]]),
+        T_sim=25,
+        n_samples=50,
+        bounds_scale=50.0,
+        terminal_box_halfwidth=1.0,
+    )

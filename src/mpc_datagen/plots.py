@@ -4,7 +4,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from typing import Callable
 
-from .mpc_data import MPCDataset, MPCTrajectory
+from .mpc_data import MPCDataset
 from .package_logger import PackageLogger
 
 __logger__ = PackageLogger.get_logger(__name__)
@@ -17,9 +17,9 @@ COLORS = [
 
 def _plotly_multiline(x: np.ndarray, axis: int=0):
     if axis == 0:
-        return np.hstack([x, np.full((x.shape[0], 1), np.nan)])
+        return np.hstack([x, np.full((x.shape[0], 1), np.nan)]).flatten()
     elif axis == 1:
-        return np.vstack([x, np.full((x.shape[1], 1), np.nan)])
+        return np.vstack([x, np.full((x.shape[1], 1), np.nan)]).flatten()
 
 
 def mpc_trajectories(
@@ -28,8 +28,7 @@ def mpc_trajectories(
     control_labels: list,
     plot_predictions: bool = False,
     time_bound: float = None,  
-    html_path: str = None,
-):
+    html_path: str = None) -> go.Figure:
     """Plot MPC trajectories for states and controls using Plotly.
 
     Parameters
@@ -229,8 +228,7 @@ def lyapunov(
     resolution: int = 100,
     plot_3d: bool = False,
     html_path: str = None,
-    use_optimal_v: bool = False,
-):
+    use_optimal_v: bool = False):
     """Plot the Lyapunov function landscape and MPC trajectories in 2D or 3D.
     Only two state dimensions can be visualized at once.
 
@@ -351,13 +349,9 @@ def lyapunov(
                 x = _plotly_multiline(traj.predicted_states[:, :, idx_x])
                 y = _plotly_multiline(traj.predicted_states[:, :, idx_y])
             else:
-                v_traj = traj.costs
-                x = traj.states[:-1, idx_x]
-                y = traj.states[:-1, idx_y]
-
-            v_traj = v_traj.flatten()
-            x = x.flatten()
-            y = y.flatten()
+                v_traj = traj.costs.flatten()
+                x = traj.states[:-1, idx_x].flatten()
+                y = traj.states[:-1, idx_y].flatten()
 
             if v_traj.shape != x.shape or v_traj.shape != y.shape:
                 __logger__.warning(
@@ -446,22 +440,21 @@ def lyapunov(
         fig.show()
 
 
-def cost_decrease(
+def relaxed_dp_residual(
     dataset: MPCDataset,
-    html_path: str = None,
-) -> go.Figure:
+    html_path: str = None) -> go.Figure:
     """Plot Lyapunov-style one-step descent check.
 
     For each trajectory entry, plots
 
-    $$\Delta V_n = V_{n+1} - V_n + \ell(x_n, u_n)$$
+    $$s_n = V_N(x_{n+1}) - V_N(x_n) + \ell(x_n, u_n)$$
 
-    where $V_n$ is the MPC cost-to-go at time step $n$ (taken from the stored
+    where $V_N$ is the MPC cost-to-go at time step $n$ (taken from the stored
     per-step value function / objective), and $\ell(x_n,u_n)$ is the *single*
     stage cost at time step $n$ along the closed-loop trajectory.
 
     Visual interpretation: values above 0 violate the one-step descent
-    inequality $V(x_{n+1}) - V(x_n) \le -\ell(x_n,u_n)$.
+    inequality $V_N(x_{n+1}) - V_N(x_n) \le -\ell(x_n,u_n)$.
 
     Parameters
     ----------
@@ -529,6 +522,121 @@ def cost_decrease(
                 x=np.arange(num_steps),
                 y=deltas,
                 mode='lines',
+                name=f'Run {id+1} - s<sub>n</sub>',
+                line=dict(color=color, width=2),
+                legendgroup=f'Run {id+1}',
+                showlegend=True
+            )
+        )
+
+    fig.add_trace(
+        go.Scatter(
+            x=[0, 1],
+            y=[0, 0],
+            mode='lines',
+            line=dict(color='black', width=1, dash='dash'),
+            showlegend=False,
+            hoverinfo='skip'
+        )
+    )
+
+    fig.update_layout(
+        title_text=(
+            "One-step descent check: "
+            "s<sub>n</sub> = V<sub>N</sub>(x<sub>n+1</sub>) - V<sub>N</sub>(x<sub>n</sub>) + &#8467;(x<sub>n</sub>,u<sub>n</sub>)"
+        ),
+        xaxis_title=r"$n$",
+        yaxis_title=r"$s_n$",
+        hovermode="x unified",
+        margin=dict(t=120),
+    )
+
+    if html_path is not None:
+        os.makedirs(os.path.dirname(html_path), exist_ok=True)
+        fig.write_html(html_path, include_mathjax='cdn')
+        __logger__.info(f"Cost descent plot saved to {html_path}.")
+    else:
+        fig.show()
+
+    return fig
+
+def cost_descent(
+    dataset: MPCDataset,
+    html_path: str = None) -> go.Figure:
+    """Plot cost descent check.
+
+    For each trajectory entry, plots
+
+    $$\Delta V_k = V_{k+1} - V_k$$
+
+    where $V_k$ is the MPC cost-to-go at time step $k$ (taken from the stored
+    per-step value function / objective).
+
+    Visual interpretation: values above 0 violate the one-step descent
+    inequality $V(x_{k+1}) - V(x_k) \le 0$.
+    Parameters
+    ----------
+    dataset : MPCDataset
+        The dataset containing trajectories to plot.
+    html_path : str, optional
+        If provided, saves the plot to the specified HTML file.
+
+    Returns
+    -------
+    fig : plotly.graph_objects.Figure
+        The resulting Plotly figure.
+    """
+    if len(dataset) == 0:
+        __logger__.warning("Dataset is empty.")
+        return go.Figure()
+
+    fig = go.Figure()
+
+    for entry in dataset:
+        traj = entry.trajectory
+        cost = entry.config.cost
+        id = entry.meta.id
+
+        if traj.costs is None:
+            try:
+                traj.recalculate_costs(cost)
+            except Exception as exc:
+                __logger__.warning(
+                    f"Entry {id} could not recalculate costs: {exc}."
+                )
+                continue
+
+        if traj.costs is None or np.all(np.isnan(traj.costs)):
+            __logger__.warning(f"Entry {id} has invalid costs; skipping.")
+            continue
+
+        if traj.horizon_costs is None:
+            __logger__.warning(f"Entry {id} missing horizon_costs; skipping.")
+            continue
+
+        num_steps = traj.horizon_costs.shape[1] - 1
+
+        if num_steps <= 0:
+            __logger__.warning(f"Entry {id} has insufficient steps; skipping.")
+            continue
+
+        stage_costs = traj.horizon_costs
+        
+        # 1. Berechnen der Cost-to-Go V (Restkosten)
+        V = np.flip(np.cumsum(np.flip(stage_costs, axis=1), axis=1), axis=1)
+        deltas = V[:, 1:] - V[:, :-1]
+        steps = np.tile(np.arange(deltas.shape[1]), (deltas.shape[0], 1))
+
+        deltas = _plotly_multiline(deltas)
+        steps = _plotly_multiline(steps)
+
+        color = COLORS[id % len(COLORS)]
+
+        fig.add_trace(
+            go.Scatter(
+                x=steps,
+                y=deltas,
+                mode='lines',
                 name=f'Run {id+1} - ΔV',
                 line=dict(color=color, width=2),
                 legendgroup=f'Run {id+1}',
@@ -550,10 +658,10 @@ def cost_decrease(
     fig.update_layout(
         title_text=(
             "One-step descent check: "
-            "&#916;V = V<sub>n+1</sub> - V<sub>n</sub> + &#8467;(x<sub>n</sub>,u<sub>n</sub>)"
+            "ΔV = V<sub>k+1</sub> - V<sub>k</sub>"
         ),
-        xaxis_title=r"$n$",
-        yaxis_title=r"$\Delta V$",
+        xaxis_title=r"$k$",
+        yaxis_title=r"$\Delta V_k$",
         hovermode="x unified",
         margin=dict(t=120),
     )
@@ -566,4 +674,3 @@ def cost_decrease(
         fig.show()
 
     return fig
-
