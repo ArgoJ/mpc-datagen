@@ -92,10 +92,10 @@ class StabilityVerifier:
             )
             self.cfg.T_sim = local_cfg.T_sim
 
-        if self.cfg.T_sim > self.traj.length:
+        if self.cfg.T_sim > self.traj.sim_steps:
             raise ValueError(
                 "Entry T_sim exceeds trajectory length. T_sim must be <= trajectory length."
-                f"{self.cfg.T_sim} > {self.traj.length}"
+                f"{self.cfg.T_sim} > {self.traj.sim_steps}"
             )
         if self.cfg.constraints.has_bx_e() != local_cfg.constraints.has_bx_e():
             raise ValueError(
@@ -121,7 +121,7 @@ class StabilityVerifier:
         """Check if OCP predictions (solved_states) are available for Lyapunov calculation."""
         self._require_bound_entry()
         # Empirical verification only requires stored value function and trajectories.
-        if self.traj.costs is None or len(self.traj.costs) == 0:
+        if self.traj.V_N is None or len(self.traj.V_N) == 0:
             __logger__.warning(
                 f"Entry ID {getattr(self.meta, 'id', 'unknown')} missing stored cost; cannot verify Lyapunov decrease."
             )
@@ -133,9 +133,9 @@ class StabilityVerifier:
     def _V(self, step_index: int) -> float:
         """Get V_N(x_step) using the selected value-function source."""
         self._require_bound_entry()
-        if step_index < 0 or step_index >= len(self.traj.costs):
+        if step_index < 0 or step_index >= len(self.traj.V_N):
             raise IndexError(f"Step index {step_index} out of range for trajectory costs.")
-        return float(self.traj.costs[step_index])
+        return float(self.traj.V_N[step_index])
 
     def _l_star(self, x: np.ndarray) -> float:
         """Lower bound on l*(x) := min_u l(x,u) via unconstrained minimization.
@@ -207,8 +207,11 @@ class StabilityVerifier:
     def alpha_and_max_violation(self, alpha_required: float = 1e-3, min_cost_threshold: float = 1e-5) -> AlphaViolationStats:
         """
         This implementation estimates the *observed* alpha and maximum violation at each step as
-            alpha_obs(n) = min((V_n - V_{n+1}) / l_n)
-            viol(n)      = max(0, V_{n+1} - (V_n - alpha_required*l_n))
+        
+        $$\alpha_{\text{obs}}(n) = min((V_N(x_k) - V_N(x_{k+1})) / \ell(x_k,u_k))$$  
+        $$viol(n)      = max(0, V_N(x_{k+1}) - V_N(x_k) + \alpha_{\text{req}}*\ell(x_k,u_k))$$  
+        
+        where \ell(x_k,u_k) is the stage cost at step n.
 
         Parameters
         ----------
@@ -230,7 +233,7 @@ class StabilityVerifier:
         min_residual = float("inf")
         n_used = 0
 
-        T_sim = min(self.cfg.T_sim, len(self.traj.states), len(self.traj.costs))
+        T_sim = min(self.cfg.T_sim, len(self.traj.states), len(self.traj.V_N))
         for n in range(T_sim - 1):
             V_curr = self._V(n)
             V_next = self._V(n + 1)
@@ -335,7 +338,7 @@ class StabilityVerifier:
         """Estimate the maximum gamma value over the dataset."""
         gamma_values: List[float] = []
 
-        T_sim = min(self.cfg.T_sim, len(self.traj.states), len(self.traj.costs))
+        T_sim = min(self.cfg.T_sim, len(self.traj.states), len(self.traj.V_N))
         for n in range(T_sim):
             x = np.asarray(self.traj.states[n], dtype=float)
             if not np.all(np.isfinite(x)):

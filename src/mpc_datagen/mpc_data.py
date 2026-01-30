@@ -74,7 +74,38 @@ class LinearSystem:
 
 @dataclass
 class LinearLSCost:
-    """Linearized system matrices."""
+    r"""This class defines the objective function terms for the Optimal Control Problem (OCP)
+    using the standard output-based formulation common in NMPC solvers (e.g., Acados).
+
+    Stage Cost:
+        l(x, u) = s * 0.5 * || Vx * x + Vu * u - yref ||_W^2
+    
+    Terminal Cost:
+        l_e(x)  = s_e * 0.5 * || Vx_e * x - yref_e ||_W_e^2
+
+    Attributes
+    ----------
+    Vx : np.ndarray
+        Output matrix for the state $x$ in the stage cost. Shape: (ny, nx).
+    Vu : np.ndarray
+        Output matrix for the input $u$ in the stage cost. Shape: (ny, nu).
+    W : np.ndarray
+        Weighting matrix for the stage cost. Shape: (ny, ny).
+        Should be symmetric and positive (semi-)definite.
+    yref : np.ndarray
+        Reference signal for the stage outputs. Shape: (ny,).
+    Vx_e : np.ndarray
+        Output matrix for the state $x$ in the terminal cost. Shape: (ny_e, nx).
+    W_e : np.ndarray
+        Weighting matrix for the terminal cost. Shape: (ny_e, ny_e).
+    yref_e : np.ndarray
+        Reference signal for the terminal outputs. Shape: (ny_e,).
+    stage_scale : float
+        Scaling factor applied to the stage cost term (default: 1.0).
+        Useful for numerical conditioning of the solver.
+    terminal_scale : float
+        Scaling factor applied to the terminal cost term (default: 1.0).
+    """
     Vx: np.ndarray = field(default_factory=lambda: np.array([[]]))
     Vu: np.ndarray = field(default_factory=lambda: np.array([[]]))
     W: np.ndarray = field(default_factory=lambda: np.array([[]]))
@@ -89,7 +120,11 @@ class LinearLSCost:
         """Compute the cost for a given output vector y."""
         y = self.Vx @ x + self.Vu @ u
         e = y - self.yref
-        return 0.5 * float(e.T @ self.W @ e) * (self.stage_scale if use_scaled else 1.0)
+        
+        scale = 0.5
+        if use_scaled:
+            scale *= self.stage_scale
+        return scale * float(e.T @ self.W @ e)
     
     def get_terminal_cost(self, x: np.ndarray, use_scaled: bool = False) -> float:
         """Compute the terminal cost for a given output vector y."""
@@ -97,7 +132,11 @@ class LinearLSCost:
             return 0.0
         y = self.Vx_e @ x
         e = y - self.yref_e
-        return 0.5 * float(e.T @ self.W_e @ e) * (self.terminal_scale if use_scaled else 1.0)
+        
+        scale = 0.5
+        if use_scaled:
+            scale *= self.terminal_scale
+        return scale * float(e.T @ self.W_e @ e)
 
     def has_terminal_cost(self) -> bool:
         """Check if terminal cost matrices are defined."""
@@ -137,7 +176,31 @@ class LinearLSCost:
 
 @dataclass
 class Constraints:
-    """Linearized system matrices."""
+    r"""Definition of constraints for the Optimal Control Problem (OCP).
+
+    Attributes
+    ----------
+    x0 : np.ndarray
+        Initial state vector $x_0 \in \mathbb{R}^{n_x}$.
+    lbx : np.ndarray
+        Lower bounds on the state vector $\underline{x}$ (stage constraints).
+        Shape: (nx,). Condition: $x_k \ge \underline{x}$ for $k=0 \dots N-1$.
+    ubx : np.ndarray
+        Upper bounds on the state vector $\overline{x}$ (stage constraints).
+        Shape: (nx,). Condition: $x_k \le \overline{x}$ for $k=0 \dots N-1$.
+    lbu : np.ndarray
+        Lower bounds on the input vector $\underline{u}$.
+        Shape: (nu,). Condition: $u_k \ge \underline{u}$ for $k=0 \dots N-1$.
+    ubu : np.ndarray
+        Upper bounds on the input vector $\overline{u}$.
+        Shape: (nu,). Condition: $u_k \le \overline{u}$ for $k=0 \dots N-1$.
+    lbx_e : np.ndarray
+        Lower bounds on the terminal state vector $\underline{x}_f$.
+        Shape: (nx,). Condition: $x_N \ge \underline{x}_f$.
+    ubx_e : np.ndarray
+        Upper bounds on the terminal state vector $\overline{x}_f$.
+        Shape: (nx,). Condition: $x_N \le \overline{x}_f$.
+    """
     x0: np.ndarray = field(default_factory=lambda: np.array([]))
     lbx: np.ndarray = field(default_factory=lambda: np.array([]))
     ubx: np.ndarray = field(default_factory=lambda: np.array([]))
@@ -206,7 +269,27 @@ class Constraints:
 
 @dataclass
 class MPCConfig:
-    """Configuration used for the MPC problem."""
+    r"""Configuration parameters for the Model Predictive Control (MPC) problem.
+
+    Attributes
+    ----------
+    T_sim : int
+        Total number of closed-loop simulation steps to perform ($T_{sim}$).
+    N : int
+        Prediction horizon length for the OCP.
+    nx : int
+        Dimension of the state vector $x \in \mathbb{R}^{n_x}$.
+    nu : int
+        Dimension of the control input vector $u \in \mathbb{R}^{n_u}$.
+    dt : float
+        Sampling time $\Delta t$ in seconds.
+    constraints : Constraints
+        Definition of state and input constraints (box constraints) and terminal sets.
+    model : LinearSystem
+        The linear system dynamics defined by matrices $A$ and $B$ (discrete time).
+    cost : LinearLSCost
+        The quadratic cost function parameters (weighting matrices $Q, R$, terminal cost $P$, references).
+    """
     T_sim: int = 0                  # Simulation steps
     N: int = 0                      # Prediction horizon
     nx: int = 0                     # State dimension
@@ -251,19 +334,52 @@ class MPCConfig:
 
 @dataclass
 class MPCTrajectory:
-    """The actual data resulting from a run."""
-    states: np.ndarray          # (T, nx)
-    inputs: np.ndarray          # (T, nu)
-    times: np.ndarray           # (T,)
-    solver_costs: np.ndarray                        # (T,)
-    costs: Optional[np.ndarray] = None              # (T,)
-    horizon_costs: Optional[np.ndarray] = None      # (T, N+1)
-    predicted_states: Optional[np.ndarray] = None   # (T, N+1, nx) - OCP predictions at each step
-    predicted_inputs: Optional[np.ndarray] = None   # (T, N, nu)   - OCP predictions at each step
+    r"""Data resulting from a single MPC simulation run.
+
+    This container holds both the realized closed-loop trajectories (what actually happened)
+    and the open-loop predictions from the solver (what was planned).
+
+    Attributes
+    ----------
+    states : np.ndarray
+        Closed-loop state trajectory history. Shape: (T_sim + 1, nx).
+    inputs : np.ndarray
+        Closed-loop input trajectory history. Shape: (T_sim, nu).
+    times : np.ndarray
+        Simulation timestamps. Shape: (T_sim + 1,).
+    V_solver : np.ndarray
+        Raw objective values returned by the solver (potentially scaled). Shape: (T_sim,).
+    V_N : np.ndarray, optional
+        Re-calculated Optimal Value Function V_N(x) (Lyapunov candidate). Shape: (T_sim,).
+    V_horizon : np.ndarray, optional
+        Sequence of stage costs along the prediction horizon. Shape: (T_sim, N+1).
+    predicted_states : np.ndarray, optional
+        Predicted open-loop state trajectories at each step. Shape: (T_sim, N+1, nx).
+    predicted_inputs : np.ndarray, optional
+        Predicted open-loop input trajectories at each step. Shape: (T_sim, N, nu).
+    feasible : bool
+        Flag indicating if the OCP was feasible throughout the trajectory. Default: True.
+
+    Properties
+    ----------
+    sim_steps : int
+        Get the simulation length in steps.
+    horizon : int, optional
+        Get the prediction horizon length (if available).
+    """
+
+    states: np.ndarray
+    inputs: np.ndarray
+    times: np.ndarray
+    V_solver: np.ndarray
+    V_N: Optional[np.ndarray] = None
+    V_horizon: Optional[np.ndarray] = None
+    predicted_states: Optional[np.ndarray] = None
+    predicted_inputs: Optional[np.ndarray] = None
     feasible: bool = True
     
     @property
-    def length(self) -> int:
+    def sim_steps(self) -> int:
         """Get the simulation length in steps."""
         return self.states.shape[0] - 1
     
@@ -272,7 +388,18 @@ class MPCTrajectory:
         """Get the prediction horizon length (if available)."""
         if self.predicted_states is not None:
             return self.predicted_states.shape[1] - 1
+        if self.predicted_inputs is not None:
+            return self.predicted_inputs.shape[1]
+        if self.V_horizon is not None:
+            return self.V_horizon.shape[1] - 1
         return None
+
+    @property
+    def V_pred(self) -> np.ndarray:
+        """The cost-to-go for each trajectory at each step. (shape: (T_sim, N+1))"""
+        if self.V_horizon is None:
+            raise ValueError("No horizon costs available to calculate cost-to-go. Call 'recalculate_costs()' first.")
+        return np.flip(np.cumsum(np.flip(self.V_horizon, axis=1), axis=1), axis=1)
     
     def get_scaled_costs(self, stage_scale: float, terminal_scale: float = 1.0) -> np.ndarray:
         """
@@ -288,10 +415,10 @@ class MPCTrajectory:
         scaled_costs : np.ndarray
             The scaled total costs for each trajectory. (shape: (T_sim,))
         """
-        if self.horizon_costs is None:
+        if self.V_horizon is None:
             raise ValueError("No horizon costs available to scale. Call 'recalculate_costs()' first.")
 
-        scaled_costs = self.horizon_costs.copy()
+        scaled_costs = self.V_horizon.copy()
         scaled_costs[:, :-1] *= stage_scale  # Scale stage costs
         scaled_costs[:, -1] *= terminal_scale  # Scale terminal costs
         
@@ -322,8 +449,8 @@ class MPCTrajectory:
         N = self.predicted_inputs.shape[1]
 
         # Initialize arrays            
-        self.costs = np.full(T_sim, np.nan)
-        self.horizon_costs = np.full((T_sim, N+1), np.nan)
+        self.V_N = np.full(T_sim, np.nan)
+        self.V_horizon = np.full((T_sim, N+1), np.nan)
 
         # Calculation loop
         for i in range(T_sim):
@@ -332,15 +459,15 @@ class MPCTrajectory:
             for k in range(N):
                 x_k = self.predicted_states[i, k, :]
                 u_k = self.predicted_inputs[i, k, :]
-                self.horizon_costs[i, k] = cost.get_stage_cost(x_k, u_k)
+                self.V_horizon[i, k] = cost.get_stage_cost(x_k, u_k)
             
             # Terminal Cost
             if cost.Vx_e.size != 0 and cost.W_e.size != 0:
                 x_N = self.predicted_states[i, N, :]
-                self.horizon_costs[i, N] = cost.get_terminal_cost(x_N)
+                self.V_horizon[i, N] = cost.get_terminal_cost(x_N)
             
         # Total unscaled costs
-        self.costs = self.horizon_costs.sum(axis=1)
+        self.V_N = self.V_horizon.sum(axis=1)
 
     @classmethod
     def from_hdf5(cls, grp: h5py.Group) -> "MPCTrajectory":
@@ -353,9 +480,9 @@ class MPCTrajectory:
             states=traj_grp["states"][:, :],
             inputs=traj_grp["inputs"][:, :],
             times=traj_grp["times"][:],
-            solver_costs=traj_grp["solver_costs"][:],
-            costs=traj_grp["costs"][:] if "costs" in traj_grp else None,
-            horizon_costs=traj_grp["horizon_costs"][:, :] if "horizon_costs" in traj_grp else None,
+            V_solver=traj_grp["V_solver"][:],
+            V_N=traj_grp["V_N"][:] if "V_N" in traj_grp else None,
+            V_horizon=traj_grp["V_horizon"][:, :] if "V_horizon" in traj_grp else None,
             predicted_states=traj_grp["predicted_states"][:, :, :] if "predicted_states" in traj_grp else None,
             predicted_inputs=traj_grp["predicted_inputs"][:, :, :] if "predicted_inputs" in traj_grp else None,
             feasible=bool(traj_grp.attrs.get("feasible", True)),
@@ -367,12 +494,12 @@ class MPCTrajectory:
         traj_grp.create_dataset("states", data=self.states, compression="gzip")
         traj_grp.create_dataset("inputs", data=self.inputs, compression="gzip")
         traj_grp.create_dataset("times", data=self.times, compression="gzip")
-        traj_grp.create_dataset("solver_costs", data=self.solver_costs, compression="gzip")
+        traj_grp.create_dataset("V_solver", data=self.V_solver, compression="gzip")
 
-        if self.costs is not None:
-            traj_grp.create_dataset("costs", data=self.costs, compression="gzip")
-        if save_ocp_trajs and self.horizon_costs is not None:
-            traj_grp.create_dataset("horizon_costs", data=self.horizon_costs, compression="gzip")
+        if self.V_N is not None:
+            traj_grp.create_dataset("V_N", data=self.V_N, compression="gzip")
+        if save_ocp_trajs and self.V_horizon is not None:
+            traj_grp.create_dataset("V_horizon", data=self.V_horizon, compression="gzip")
         if save_ocp_trajs and self.predicted_states is not None:
             traj_grp.create_dataset("predicted_states", data=self.predicted_states, compression="gzip")
         if save_ocp_trajs and self.predicted_inputs is not None:
@@ -418,7 +545,7 @@ class MPCTrajectory:
             states=states,
             inputs=inputs,
             times=times,
-            solver_costs=costs,
+            V_solver=costs,
             predicted_states=predicted_states,
             predicted_inputs=predicted_inputs,
             feasible=True
@@ -427,7 +554,20 @@ class MPCTrajectory:
 
 @dataclass
 class MPCData:
-    """A single dataset entry combining config and result."""
+    r"""Container class representing a single entry in the MPC dataset.
+
+    Attributes
+    ----------
+    trajectory : MPCTrajectory
+        The numerical results of the simulation run, containing both the closed-loop
+        realization and the open-loop solver predictions ($V_N$, cost sequences).
+    meta : MPCMeta
+        Metadata describing the generation context (e.g., unique UUID, timestamps,
+        solver status, random seeds).
+    config : MPCConfig
+        The specific parameter set used to define the OCP for this run
+        (including system matrices, constraints, and cost weights).
+    """
     trajectory: MPCTrajectory
     meta: MPCMeta = field(default_factory=MPCMeta)
     config: MPCConfig = field(default_factory=MPCConfig)
@@ -445,8 +585,8 @@ class MPCData:
             raise ValueError(f"Trajectory inputs shape mismatch: expected {(T_sim, nu)}, got {traj.inputs.shape}")
         if traj.times.shape != (T_sim + 1,):
             raise ValueError(f"Trajectory times shape mismatch: expected {(T_sim + 1,)}, got {traj.times.shape}")
-        if traj.solver_costs.shape != (T_sim,):
-            raise ValueError(f"Trajectory solver_costs shape mismatch: expected {(T_sim,)}, got {traj.solver_costs.shape}")
+        if traj.V_solver.shape != (T_sim,):
+            raise ValueError(f"Trajectory solver_costs shape mismatch: expected {(T_sim,)}, got {traj.V_solver.shape}")
         if len(self.meta.status_codes) != T_sim:
             raise ValueError(f"Meta status codes length mismatch: expected {T_sim}, got {len(self.meta.status_codes)}")
         if not self.is_feasible() and traj.feasible:
@@ -465,15 +605,15 @@ class MPCData:
             
         if recalculate_costs:
             traj.recalculate_costs(self.config.cost)
-            if traj.costs is not None:
-                if traj.costs.shape != (T_sim,):
-                    raise ValueError(f"Trajectory costs shape mismatch: expected {(T_sim,)}, got {traj.costs.shape}")
-            if traj.horizon_costs is not None:
-                if traj.horizon_costs.shape != (T_sim, N+1):
-                    raise ValueError(f"Trajectory horizon_costs shape mismatch: expected {(T_sim, N+1)}, got {traj.horizon_costs.shape}")
+            if traj.V_N is not None:
+                if traj.V_N.shape != (T_sim,):
+                    raise ValueError(f"Trajectory costs shape mismatch: expected {(T_sim,)}, got {traj.V_N.shape}")
+            if traj.V_horizon is not None:
+                if traj.V_horizon.shape != (T_sim, N+1):
+                    raise ValueError(f"Trajectory horizon_costs shape mismatch: expected {(T_sim, N+1)}, got {traj.V_horizon.shape}")
 
             scaled_costs = traj.get_scaled_costs(stage_scale=self.config.cost.stage_scale, terminal_scale=self.config.cost.terminal_scale)
-            if not np.allclose(scaled_costs, traj.solver_costs, rtol=1e-3, atol=1e-6, equal_nan=True):
+            if not np.allclose(scaled_costs, traj.V_solver, rtol=1e-3, atol=1e-6, equal_nan=True):
                 __logger__.warning(f"Recalculated scaled costs do not match stored costs.")
 
     def is_feasible(self) -> bool:
@@ -491,7 +631,7 @@ class MPCData:
 
         # NaNs in key arrays indicate an invalid run
         t = self.trajectory
-        if np.isnan(t.states).any() or np.isnan(t.inputs).any() or np.isnan(t.solver_costs).any():
+        if np.isnan(t.states).any() or np.isnan(t.inputs).any() or np.isnan(t.V_solver).any():
             return False
         return True
 
@@ -666,7 +806,7 @@ class MPCDataset:
             traj_has_nan = (
                 np.isnan(traj.states).any()
                 or np.isnan(traj.inputs).any()
-                or np.isnan(traj.solver_costs).any()
+                or np.isnan(traj.V_solver).any()
             )
 
             # Determine effective constraints (Priority: function arg > dataset entry > None)

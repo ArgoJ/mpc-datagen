@@ -97,7 +97,7 @@ def solve_mpc_closed_loop(
         # Store predictions
         traj.predicted_states[i, :, :] = pred_x
         traj.predicted_inputs[i, :, :] = pred_u
-        traj.solver_costs[i] = solver.get_cost()
+        traj.V_solver[i] = solver.get_cost()
         
         # Apply Control
         u_applied = pred_u[0, :].flatten()

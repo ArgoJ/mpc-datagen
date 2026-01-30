@@ -344,12 +344,12 @@ def lyapunov(
         color = COLORS[idx % len(COLORS)]
         
         if plot_3d:
-            if use_optimal_v and traj.horizon_costs is not None:
-                v_traj = _plotly_multiline(traj.horizon_costs)
+            if use_optimal_v and traj.V_horizon is not None:
+                v_traj = _plotly_multiline(traj.V_horizon)
                 x = _plotly_multiline(traj.predicted_states[:, :, idx_x])
                 y = _plotly_multiline(traj.predicted_states[:, :, idx_y])
             else:
-                v_traj = traj.costs.flatten()
+                v_traj = traj.V_N.flatten()
                 x = traj.states[:-1, idx_x].flatten()
                 y = traj.states[:-1, idx_y].flatten()
 
@@ -479,24 +479,11 @@ def relaxed_dp_residual(
         cost = entry.config.cost
         id = entry.meta.id
 
-        if traj.costs is None:
-            try:
-                traj.recalculate_costs(cost)
-            except Exception as exc:
-                __logger__.warning(
-                    f"Entry {id} could not recalculate costs: {exc}."
-                )
-                continue
-
-        if traj.costs is None or np.all(np.isnan(traj.costs)):
+        if traj.V_N is None or np.all(np.isnan(traj.V_N)):
             __logger__.warning(f"Entry {id} has invalid costs; skipping.")
             continue
 
-        if traj.horizon_costs is None:
-            __logger__.warning(f"Entry {id} missing horizon_costs; skipping.")
-            continue
-
-        num_steps = min(len(traj.costs) - 1, traj.inputs.shape[0], traj.states.shape[0] - 1)
+        num_steps = min(len(traj.V_N) - 1, traj.inputs.shape[0], traj.states.shape[0] - 1)
 
         if num_steps <= 0:
             __logger__.warning(f"Entry {id} has insufficient steps; skipping.")
@@ -512,7 +499,7 @@ def relaxed_dp_residual(
                 continue
 
             l_n = cost.get_stage_cost(x_n, u_n)
-            deltas[n] = traj.costs[n + 1] - traj.costs[n] + l_n
+            deltas[n] = traj.V_N[n + 1] - traj.V_N[n] + l_n
             
 
         color = COLORS[id % len(COLORS)]
@@ -542,7 +529,7 @@ def relaxed_dp_residual(
 
     fig.update_layout(
         title_text=(
-            "One-step descent check: "
+            "Relaxed DP residual: "
             "s<sub>n</sub> = V<sub>N</sub>(x<sub>n+1</sub>) - V<sub>N</sub>(x<sub>n</sub>) + &#8467;(x<sub>n</sub>,u<sub>n</sub>)"
         ),
         xaxis_title=r"$n$",
@@ -554,7 +541,7 @@ def relaxed_dp_residual(
     if html_path is not None:
         os.makedirs(os.path.dirname(html_path), exist_ok=True)
         fig.write_html(html_path, include_mathjax='cdn')
-        __logger__.info(f"Cost descent plot saved to {html_path}.")
+        __logger__.info(f"Relaxed DP residual plot saved to {html_path}.")
     else:
         fig.show()
 
@@ -594,36 +581,13 @@ def cost_descent(
 
     for entry in dataset:
         traj = entry.trajectory
-        cost = entry.config.cost
         id = entry.meta.id
 
-        if traj.costs is None:
-            try:
-                traj.recalculate_costs(cost)
-            except Exception as exc:
-                __logger__.warning(
-                    f"Entry {id} could not recalculate costs: {exc}."
-                )
-                continue
-
-        if traj.costs is None or np.all(np.isnan(traj.costs)):
-            __logger__.warning(f"Entry {id} has invalid costs; skipping.")
-            continue
-
-        if traj.horizon_costs is None:
+        if traj.V_horizon is None:
             __logger__.warning(f"Entry {id} missing horizon_costs; skipping.")
             continue
 
-        num_steps = traj.horizon_costs.shape[1] - 1
-
-        if num_steps <= 0:
-            __logger__.warning(f"Entry {id} has insufficient steps; skipping.")
-            continue
-
-        stage_costs = traj.horizon_costs
-        
-        # 1. Berechnen der Cost-to-Go V (Restkosten)
-        V = np.flip(np.cumsum(np.flip(stage_costs, axis=1), axis=1), axis=1)
+        V = traj.V_pred
         deltas = V[:, 1:] - V[:, :-1]
         steps = np.tile(np.arange(deltas.shape[1]), (deltas.shape[0], 1))
 
@@ -657,7 +621,7 @@ def cost_descent(
 
     fig.update_layout(
         title_text=(
-            "One-step descent check: "
+            "Cost to go descent check: "
             "ΔV = V<sub>k+1</sub> - V<sub>k</sub>"
         ),
         xaxis_title=r"$k$",
@@ -669,7 +633,7 @@ def cost_descent(
     if html_path is not None:
         os.makedirs(os.path.dirname(html_path), exist_ok=True)
         fig.write_html(html_path, include_mathjax='cdn')
-        __logger__.info(f"Cost decrease plot saved to {html_path}.")
+        __logger__.info(f"Cost to go descent plot saved to {html_path}.")
     else:
         fig.show()
 
