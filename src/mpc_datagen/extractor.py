@@ -11,7 +11,7 @@ __logger__ = PackageLogger.get_logger(__name__)
 
 
 # --- Helpers ---
-def _ensure_linear_ls_cost_type(cost_type: Literal['LINEAR_LS', 'NONLINEAR_LS']) -> None:
+def ensure_linear_ls_cost_type(cost_type: Literal['LINEAR_LS', 'NONLINEAR_LS']) -> None:
     """Ensure that only LINEAR_LS cost type is used."""
     if cost_type != 'LINEAR_LS':
         raise NotImplementedError("Only LINEAR_LS cost type is supported in this verifier.")
@@ -99,14 +99,11 @@ def indexed_bounds(
 def extract_QR(
     W: np.ndarray, 
     Vx: np.ndarray, 
-    Vu: np.ndarray, 
-    cost_type: Literal['LINEAR_LS', 'NONLINEAR_LS']
+    Vu: np.ndarray
 ) -> Optional[tuple[np.ndarray, np.ndarray]]:
     """Extracts Q, R from the cost configuration."""
     if _is_none(W, Vx, Vu):
         return None
-
-    _ensure_linear_ls_cost_type(cost_type)
 
     W = np.asarray(W)
     Vx = np.asarray(Vx)
@@ -119,14 +116,11 @@ def extract_QR(
 
 def extract_Qf(
     W_e: np.ndarray,
-    Vx_e: np.ndarray,
-    cost_type_e: Literal['LINEAR_LS', 'NONLINEAR_LS']
+    Vx_e: np.ndarray
 ) -> Optional[np.ndarray]:
     """Extracts Qf from the terminal cost configuration."""
     if _is_none(W_e, Vx_e):
         return None
-
-    _ensure_linear_ls_cost_type(cost_type_e)
 
     W_e = np.asarray(W_e)
     Vx_e = np.asarray(Vx_e)

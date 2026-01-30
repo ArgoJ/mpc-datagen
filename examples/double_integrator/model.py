@@ -207,10 +207,8 @@ if __name__ == "__main__":
 
         dt = 0.1
         solver, info = get_ocp_solver(
-            A_c,
-            B_c,
-            Q,
-            R,
+            A_c, B_c,
+            Q, R,
             dt=dt,
             N=N,
             tol=1e-8,

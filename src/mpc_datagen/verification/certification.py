@@ -8,7 +8,7 @@ from acados_template import AcadosOcpSolver
 from .reports import TerminalIngredientsReport, GruneNoTerminalCertificateReport
 from .gruene import grune_required_horizon_and_alpha
 from .reports import StabilityReport
-from ..extractor import MPCConfigExtractor, LinearSystemExtractor, extract_Qf, extract_QR, extract_stage_reference
+from ..extractor import MPCConfigExtractor, LinearSystemExtractor, extract_Qf, extract_QR, extract_stage_reference, ensure_linear_ls_cost_type
 from ..linalg import as_mat, as_vec, sym
 
 
@@ -631,6 +631,10 @@ class StabilityCertifier:
 
         The returned `is_stable` means **certified**.
         """
+        if not (ensure_linear_ls_cost_type(solver.acados_ocp.cost.cost_type) \
+            and ensure_linear_ls_cost_type(solver.acados_ocp.cost.cost_type_e)):
+            raise ValueError("Stability certification only supports linear least-squares costs.")
+        
         cer = cls(solver)
         Q, R = extract_QR(
             cer.cfg.cost.W,
