@@ -2,7 +2,7 @@ import numpy as np
 import os
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from typing import Callable
+from typing import Callable, List, Optional, Tuple
 
 from .mpc_data import MPCDataset
 from .package_logger import PackageLogger
@@ -27,8 +27,9 @@ def mpc_trajectories(
     state_labels: list,
     control_labels: list,
     plot_predictions: bool = False,
-    time_bound: float = None,  
-    html_path: str = None) -> go.Figure:
+    time_bound: Optional[float] = None,  
+    html_path: Optional[str] = None
+) -> go.Figure:
     """Plot MPC trajectories for states and controls using Plotly.
 
     Parameters
@@ -218,17 +219,17 @@ def mpc_trajectories(
     else:   
         fig.show()
 
-
 def lyapunov(
     dataset: MPCDataset,
     lyapunov_func: Callable[[np.ndarray], np.ndarray],
-    state_indices: list = [0, 1],
-    state_labels: list = None,
-    limits: list = None,
+    state_indices: List[int] = [0, 1],
+    state_labels: Optional[List[str]] = None,
+    limits: Optional[List[Tuple[float, float]]] = None,
     resolution: int = 100,
     plot_3d: bool = False,
-    html_path: str = None,
-    use_optimal_v: bool = False):
+    html_path: Optional[str] = None,
+    use_optimal_v: bool = False
+) -> Optional[go.Figure]:
     """Plot the Lyapunov function landscape and MPC trajectories in 2D or 3D.
     Only two state dimensions can be visualized at once.
 
@@ -439,10 +440,10 @@ def lyapunov(
     else:   
         fig.show()
 
-
 def relaxed_dp_residual(
     dataset: MPCDataset,
-    html_path: str = None) -> go.Figure:
+    html_path: Optional[str] = None
+) -> go.Figure:
     """Plot Lyapunov-style one-step descent check.
 
     For each trajectory entry, plots
@@ -549,7 +550,8 @@ def relaxed_dp_residual(
 
 def cost_descent(
     dataset: MPCDataset,
-    html_path: str = None) -> go.Figure:
+    html_path: str = None
+) -> go.Figure:
     """Plot cost descent check.
 
     For each trajectory entry, plots
@@ -638,3 +640,179 @@ def cost_descent(
         fig.show()
 
     return fig
+
+def plot_roa_landscape(
+    dataset: MPCDataset,
+    state_indices: List[int] = [0, 1],
+    state_labels: Optional[List[str]] = None,
+    limits: Optional[List[Tuple[float, float]]] = None,
+    resolution: int = 100,
+    plot_3d: bool = False,
+    html_path: Optional[str] = None
+):
+    """
+    Erstellt einen Plotly-Graphen für die Region of Attraction (ROA).
+    
+    Features:
+    - Visualisiert die Lyapunov-Funktion V(x) = x^T P x als Heatmap (2D) oder Surface (3D).
+    - Zeichnet die ROA-Grenze (Level-Set c_max) als exakte Ellipse ein.
+    - Überlagert Trajektorien aus dem Dataset.
+    
+    Args:
+        certifier: Instanz von ROACertifier (muss .P Attribut haben).
+        c_max: Der berechnete maximale Level-Set Wert.
+        dataset: Liste von MPCDataset Items (optional).
+        state_indices: Welche zwei Zustände geplottet werden sollen (Schnitt durch 0).
+        plot_3d: Wenn True, wird ein 3D Surface Plot erstellt.
+    """
+    
+    # 1. Indizes & Labels setup
+    idx_x, idx_y = state_indices
+    if state_labels is None:
+        state_labels = [f"x_{idx_x}", f"x_{idx_y}"]
+
+    # 2. Relevante Sub-Matrix P extrahieren (Schnitt durch den Ursprung angenommen)
+    # V_slice(x_2d) = [x, y] @ P_slice @ [x, y].T
+    P_slice = certifier.P[np.ix_([idx_x, idx_y], [idx_x, idx_y])]
+
+    # 4. Grid Berechnung (Vektorsiert für Performance)
+    x_vec = np.linspace(limits[0][0], limits[0][1], resolution)
+    y_vec = np.linspace(limits[1][0], limits[1][1], resolution)
+    X, Y = np.meshgrid(x_vec, y_vec)
+    
+    # Flache Liste von (x, y) Punkten erstellen
+    points = np.vstack([X.ravel(), Y.ravel()]).T
+    
+    # V(x) berechnen: diag(points @ P @ points.T) effizienter:
+    # V = sum(points * (points @ P^T), axis=1)
+    Z_flat = np.sum(points * (points @ P_slice.T), axis=1)
+    Z = Z_flat.reshape(X.shape)
+
+    fig = go.Figure()
+
+    # --- PLOT: Lyapunov Funktion ---
+    if plot_3d:
+        # 3D Surface
+        fig.add_trace(go.Surface(
+            z=Z, x=x_vec, y=y_vec,
+            colorscale='Viridis', opacity=0.8,
+            name='Lyapunov Function', showscale=True,
+            # Konturlinie auf der Surface bei c_max (Rot)
+            contours = {
+                "z": {"show": True, "start": c_max, "end": c_max, "size": 0, "color": "red", "width": 5}
+            }
+        ))
+        # Optional: Transparente Ebene ("Wasserstand") bei c_max
+        z_plane = np.full_like(Z, c_max)
+        fig.add_trace(go.Surface(
+            z=z_plane, x=x_vec, y=y_vec,
+            colorscale=[[0, 'red'], [1, 'red']], opacity=0.1, showscale=False, name='ROA Level'
+        ))
+    else:
+        # 2D Contour Plot
+        fig.add_trace(go.Contour(
+            z=Z, x=x_vec, y=y_vec,
+            colorscale='Viridis',
+            # Konturlinien bis zum Maximum, mit einer Referenzlinie bei c_max
+            contours=dict(start=0, end=np.max(Z), size=c_max/2),
+            name='V(x)', opacity=0.6, showscale=True
+        ))
+
+        # --- PLOT: ROA Grenze als glatte Ellipse ---
+        # Parametrische Generierung für Vektorgrafik-Qualität
+        theta = np.linspace(0, 2*np.pi, 200)
+        circle = np.vstack([np.cos(theta), np.sin(theta)])
+        
+        try:
+            # Transformation: x = sqrt(c) * L * unit_circle
+            # L kommt aus Cholesky von P^-1
+            P_inv_slice = np.linalg.inv(P_slice)
+            L = np.linalg.cholesky(P_inv_slice)
+            ellipse = (L @ circle) * np.sqrt(c_max)
+            
+            fig.add_trace(go.Scatter(
+                x=ellipse[0, :], y=ellipse[1, :],
+                mode='lines',
+                line=dict(color='red', width=3, dash='dash'),
+                name=f'ROA Limit (c={c_max:.2f})'
+            ))
+        except np.linalg.LinAlgError:
+            pass # Fallback auf Contour-Darstellung
+
+    # --- PLOT: Trajektorien ---
+    trajectory_indices = []
+    if dataset:
+        for idx, item in enumerate(dataset):
+            traj = item.trajectory # Zugriff anpassen falls Struktur anders ist
+            color = COLORS[idx % len(COLORS)]
+            
+            # Daten extrahieren
+            x_traj = traj.states[:, idx_x]
+            y_traj = traj.states[:, idx_y]
+            
+            if plot_3d:
+                # Z-Werte berechnen (Lyapunov entlang der Trajektorie)
+                # Wir nutzen hier P des Zertifizierers für Konsistenz
+                states = traj.states
+                # V = x^T P x (Summe über alle Dimensionen des Systems!)
+                z_traj = np.sum(states * (states @ certifier.P.T), axis=1)
+                
+                fig.add_trace(go.Scatter3d(
+                    x=x_traj, y=y_traj, z=z_traj,
+                    mode='lines', line=dict(color=color, width=4),
+                    name=f'Run {idx}'
+                ))
+            else:
+                fig.add_trace(go.Scatter(
+                    x=x_traj, y=y_traj,
+                    mode='lines', line=dict(color=color, width=2),
+                    name=f'Run {idx}'
+                ))
+            
+            trajectory_indices.append(len(fig.data) - 1)
+
+    # --- Layout & Buttons ---
+    title = f"ROA Certificate (c={c_max:.2f}) - {state_labels[0]} vs {state_labels[1]}"
+    
+    layout_args = dict(
+        title=title,
+        width=1000 if plot_3d else 800,
+        height=800 if plot_3d else 700,
+        autosize=False
+    )
+    
+    if plot_3d:
+        layout_args['scene'] = dict(
+            xaxis_title=state_labels[0],
+            yaxis_title=state_labels[1],
+            zaxis_title="Lyapunov V(x)"
+        )
+    else:
+        layout_args['xaxis_title'] = state_labels[0]
+        layout_args['yaxis_title'] = state_labels[1]
+        layout_args['yaxis'] = dict(scaleanchor="x", scaleratio=1) # 1:1 Aspect Ratio
+
+    fig.update_layout(**layout_args)
+
+    # Interaktiver Button für Trajektorien
+    if dataset:
+        fig.update_layout(
+            updatemenus=[dict(
+                type="buttons", direction="left", x=1.0, y=-0.1,
+                buttons=[dict(
+                    label="Toggle Trajectories",
+                    method="restyle",
+                    # Toggle visibility für die Trajektorien-Traces
+                    args=[{"visible": 'legendonly'}, trajectory_indices],
+                    args2=[{"visible": True}, trajectory_indices]
+                )]
+            )]
+        )
+
+    # Speichern oder Anzeigen
+    if html_path:
+        os.makedirs(os.path.dirname(html_path), exist_ok=True)
+        fig.write_html(html_path)
+        print(f"Plot gespeichert unter: {html_path}")
+    else:
+        fig.show()
