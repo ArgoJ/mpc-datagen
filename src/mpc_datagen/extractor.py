@@ -152,6 +152,7 @@ class MPCConfigExtractor():
         )
         self._extract_constraints()
         self._extract_cost()
+        self._extract_model()
     
     @classmethod
     def get_cfg(cls, solver: AcadosOcpSolver) -> MPCConfig:
@@ -188,6 +189,9 @@ class MPCConfigExtractor():
         """Extract full input bounds from acados indexed bounds."""
         constr = self.ocp.constraints
 
+        # Initial state
+        self.cfg.constraints.x0 = constr.x0 if constr.x0 is not None else np.array([])
+
         # State bounds
         x_bounds = indexed_bounds(
             constr.lbx,
@@ -221,25 +225,10 @@ class MPCConfigExtractor():
             self.cfg.constraints.lbx_e = x_e_bounds[0]
             self.cfg.constraints.ubx_e = x_e_bounds[1]
 
-    
-class LinearSystemExtractor:
-    """Extractor for AcadosOcpSolver model dynamics.
-    
-    This class extracts the nonlinear dynamics function from an `AcadosOcpSolver`
-    instance for use in Lyapunov verification routines.
-    """
-
-    def __init__(self, solver: AcadosOcpSolver) -> None:
-        self.ocp = solver.acados_ocp
-        self.cfg = MPCConfigExtractor.get_cfg(solver)
-        x_ref, u_ref = self._extract_x_and_u_lin()
-        self.linear_system = self._extract_discretized_dynamics(x_ref, u_ref, self.cfg.dt)
-
-    @classmethod
-    def get_system(cls, solver: AcadosOcpSolver) -> LinearSystem:
-        """Get the linearized system matrices from the solver."""
-        extractor = cls(solver)
-        return extractor.linear_system
+    def _extract_model(self) -> None:
+        """Extract the discretized model dynamics."""
+        x_lin, u_lin = self._extract_x_and_u_lin()
+        self.cfg.model = self._extract_discretized_dynamics(x_lin, u_lin, self.cfg.dt)
 
     def _extract_x_and_u_lin(self) -> Tuple[np.ndarray, np.ndarray]:
         """Get linearization points for state and input."""
@@ -292,3 +281,22 @@ class LinearSystemExtractor:
         return LinearSystem(*discretize_and_linearize_rk4(
             x, u, f_expr, dt, x_lin, u_lin
         ))
+
+    
+class LinearSystemExtractor:
+    """Extractor for AcadosOcpSolver model dynamics.
+    
+    This class extracts the nonlinear dynamics function from an `AcadosOcpSolver`
+    instance for use in Lyapunov verification routines.
+    """
+
+    def __init__(self, solver: AcadosOcpSolver) -> None:
+        self.ocp = solver.acados_ocp
+        self.cfg = MPCConfigExtractor.get_cfg(solver)
+        self.linear_system = self.cfg.model
+
+    @classmethod
+    def get_system(cls, solver: AcadosOcpSolver) -> LinearSystem:
+        """Get the linearized system matrices from the solver."""
+        extractor = cls(solver)
+        return extractor.linear_system

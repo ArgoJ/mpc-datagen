@@ -43,9 +43,9 @@ class TestExtractors(unittest.TestCase):
         
         # Check x0 only if it's not None
         if self.solver.acados_ocp.constraints.x0 is not None:
-            np.testing.assert_allclose(extracted.x0, self.solver.acados_ocp.constraints.x0)
+            np.testing.assert_allclose(extracted.constraints.x0, self.solver.acados_ocp.constraints.x0)
         else:
-            self.assertIsNone(extracted.x0)
+            self.assertEqual(extracted.constraints.x0.size, 0)
 
 
 if __name__ == "__main__":

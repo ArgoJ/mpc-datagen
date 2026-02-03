@@ -270,8 +270,9 @@ if __name__ == "__main__":
             mdg_plots.roa(
                 lyapunov_func=lyap_fun,
                 c_level=c_min,
-                roa_bounds=roa_bounds,
+                bounds=roa_bounds,
                 state_labels=["x", "v"],
+                plot_3d=True,
                 html_path=f"plots/double_integrator_{terminal_mode}_N{N}_roa.html",
             )
         

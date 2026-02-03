@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 
 from dataclasses import dataclass, field, asdict
-from typing import List, Optional, Iterator
+from typing import List, Optional, Iterator, Tuple, Dict, Set
 from pathlib import Path
 
 from .package_logger import PackageLogger
@@ -21,6 +21,25 @@ def _is_defined_array(arr: Optional[np.ndarray], not_zero: bool = True) -> bool:
     if not_zero and np.allclose(arr, 0):
         return False
     return True 
+
+def _arrays_equal(a: Optional[np.ndarray], b: Optional[np.ndarray]) -> bool:
+    """Robust array equality check for config comparisons."""
+    if a is None or b is None:
+        return False
+    a_arr = np.asarray(a)
+    b_arr = np.asarray(b)
+    if a_arr.shape != b_arr.shape:
+        return False
+    if a_arr.size == 0 and b_arr.size == 0:
+        return True
+    return np.array_equal(a_arr, b_arr)
+
+def _values_equal(a, b) -> bool:
+    if isinstance(a, np.ndarray) or isinstance(b, np.ndarray):
+        return _arrays_equal(a, b)
+    if isinstance(a, (float, np.floating)) or isinstance(b, (float, np.floating)):
+        return bool(np.isclose(a, b))
+    return a == b
 
 @dataclass
 class MPCMeta:
@@ -57,7 +76,7 @@ class LinearSystem:
         """Load linear system matrices from a trajectory group (expects a `linear_system` subgroup)."""
         lin_sys_grp = grp.get("linear_system", None)
         if lin_sys_grp is None:
-            raise ValueError("No 'linear_system' group found in the provided HDF5 group.")
+            return cls()
 
         return cls(
             A=lin_sys_grp["A"][:] if "A" in lin_sys_grp else np.array([]),
@@ -65,12 +84,19 @@ class LinearSystem:
             gd=lin_sys_grp["gd"][:] if "gd" in lin_sys_grp else np.array([]),
         )
 
-    def to_hdf5(self, grp: h5py.Group) -> None:
+    def to_hdf5(self, grp: h5py.Group, exclude_fields: Optional[set] = None) -> None:
         """Save linear system matrices to a trajectory group (creates a `linear_system` subgroup)."""
+        exclude_fields = exclude_fields or set()
+        field_names = list(self.__dataclass_fields__.keys())
+        if all(name in exclude_fields for name in field_names):
+            return
         lin_sys_grp = grp.create_group("linear_system")
-        lin_sys_grp.create_dataset("A", data=self.A, compression="gzip")
-        lin_sys_grp.create_dataset("B", data=self.B, compression="gzip")
-        lin_sys_grp.create_dataset("gd", data=self.gd, compression="gzip") 
+        if "A" not in exclude_fields:
+            lin_sys_grp.create_dataset("A", data=self.A, compression="gzip")
+        if "B" not in exclude_fields:
+            lin_sys_grp.create_dataset("B", data=self.B, compression="gzip")
+        if "gd" not in exclude_fields:
+            lin_sys_grp.create_dataset("gd", data=self.gd, compression="gzip") 
 
 @dataclass
 class LinearLSCost:
@@ -147,7 +173,7 @@ class LinearLSCost:
         """Load cost matrices from a trajectory group (expects a `cost` subgroup)."""
         cost_grp = grp.get("cost", None)
         if cost_grp is None:
-            raise ValueError("No 'cost' group found in the provided HDF5 group.")
+            return cls()
 
         return cls(
             Vx=cost_grp["Vx"][:] if "Vx" in cost_grp else np.array([]),
@@ -161,18 +187,31 @@ class LinearLSCost:
             terminal_scale=cost_grp.attrs.get("terminal_scale", 1.0),
         )
 
-    def to_hdf5(self, grp: h5py.Group) -> None:
+    def to_hdf5(self, grp: h5py.Group, exclude_fields: Optional[set] = None) -> None:
         """Save cost matrices to a trajectory group (creates a `cost` subgroup)."""
+        exclude_fields = exclude_fields or set()
+        field_names = list(self.__dataclass_fields__.keys())
+        if all(name in exclude_fields for name in field_names):
+            return
         cost_grp = grp.create_group("cost")
-        cost_grp.create_dataset("Vx", data=self.Vx, compression="gzip")
-        cost_grp.create_dataset("Vu", data=self.Vu, compression="gzip")
-        cost_grp.create_dataset("W", data=self.W, compression="gzip")
-        cost_grp.create_dataset("yref", data=self.yref, compression="gzip")
-        cost_grp.create_dataset("Vx_e", data=self.Vx_e, compression="gzip")
-        cost_grp.create_dataset("W_e", data=self.W_e, compression="gzip")
-        cost_grp.create_dataset("yref_e", data=self.yref_e, compression="gzip")
-        cost_grp.attrs["stage_scale"] = float(self.stage_scale)
-        cost_grp.attrs["terminal_scale"] = float(self.terminal_scale)
+        if "Vx" not in exclude_fields:
+            cost_grp.create_dataset("Vx", data=self.Vx, compression="gzip")
+        if "Vu" not in exclude_fields:
+            cost_grp.create_dataset("Vu", data=self.Vu, compression="gzip")
+        if "W" not in exclude_fields:
+            cost_grp.create_dataset("W", data=self.W, compression="gzip")
+        if "yref" not in exclude_fields:
+            cost_grp.create_dataset("yref", data=self.yref, compression="gzip")
+        if "Vx_e" not in exclude_fields:
+            cost_grp.create_dataset("Vx_e", data=self.Vx_e, compression="gzip")
+        if "W_e" not in exclude_fields:
+            cost_grp.create_dataset("W_e", data=self.W_e, compression="gzip")
+        if "yref_e" not in exclude_fields:
+            cost_grp.create_dataset("yref_e", data=self.yref_e, compression="gzip")
+        if "stage_scale" not in exclude_fields:
+            cost_grp.attrs["stage_scale"] = float(self.stage_scale)
+        if "terminal_scale" not in exclude_fields:
+            cost_grp.attrs["terminal_scale"] = float(self.terminal_scale)
 
 @dataclass
 class Constraints:
@@ -244,7 +283,7 @@ class Constraints:
         """Load constraints from a trajectory group (expects a `constraints` subgroup)."""
         cons_grp = grp.get("constraints", None)
         if cons_grp is None:
-            raise ValueError("No 'constraints' group found in the provided HDF5 group.")
+            return cls()
 
         return cls(
             x0=cons_grp["x0"][:] if "x0" in cons_grp else np.array([]),
@@ -256,16 +295,27 @@ class Constraints:
             ubx_e=cons_grp["ubx_e"][:] if "ubx_e" in cons_grp else np.array([]),
         )
 
-    def to_hdf5(self, grp: h5py.Group) -> None:
+    def to_hdf5(self, grp: h5py.Group, exclude_fields: Optional[set] = None) -> None:
         """Save constraints to a trajectory group (creates a `constraints` subgroup)."""
+        exclude_fields = exclude_fields or set()
+        field_names = list(self.__dataclass_fields__.keys())
+        if all(name in exclude_fields for name in field_names):
+            return
         cons_grp = grp.create_group("constraints")
-        cons_grp.create_dataset("x0", data=self.x0, compression="gzip")
-        cons_grp.create_dataset("lbx", data=self.lbx, compression="gzip")
-        cons_grp.create_dataset("ubx", data=self.ubx, compression="gzip")
-        cons_grp.create_dataset("lbu", data=self.lbu, compression="gzip")
-        cons_grp.create_dataset("ubu", data=self.ubu, compression="gzip")
-        cons_grp.create_dataset("lbx_e", data=self.lbx_e, compression="gzip")
-        cons_grp.create_dataset("ubx_e", data=self.ubx_e, compression="gzip")
+        if "x0" not in exclude_fields:
+            cons_grp.create_dataset("x0", data=self.x0, compression="gzip")
+        if "lbx" not in exclude_fields:
+            cons_grp.create_dataset("lbx", data=self.lbx, compression="gzip")
+        if "ubx" not in exclude_fields:
+            cons_grp.create_dataset("ubx", data=self.ubx, compression="gzip")
+        if "lbu" not in exclude_fields:
+            cons_grp.create_dataset("lbu", data=self.lbu, compression="gzip")
+        if "ubu" not in exclude_fields:
+            cons_grp.create_dataset("ubu", data=self.ubu, compression="gzip")
+        if "lbx_e" not in exclude_fields:
+            cons_grp.create_dataset("lbx_e", data=self.lbx_e, compression="gzip")
+        if "ubx_e" not in exclude_fields:
+            cons_grp.create_dataset("ubx_e", data=self.ubx_e, compression="gzip")
 
 @dataclass
 class MPCConfig:
@@ -301,35 +351,131 @@ class MPCConfig:
 
     @classmethod
     def from_hdf5(cls, grp: h5py.Group) -> "MPCConfig":
-        """Load config from a trajectory group (expects a `config` subgroup)."""
-        cfg_grp = grp.get("config", None)
-        if cfg_grp is None:
+        """Load config from a trajectory group, merging optional global config if present."""
+        cfg_local = grp.get("config", None)
+        cfg_global = grp.file.get("global_config", None) if grp.file is not None else None
+
+        if cfg_local is None and cfg_global is None:
             raise ValueError("No 'config' group found in the provided HDF5 group.")
 
-        return cls(
-            T_sim=int(cfg_grp.attrs.get("T_sim", 0)),
-            N=int(cfg_grp.attrs.get("N", 10)),
-            nx=int(cfg_grp.attrs.get("nx", 2)),
-            nu=int(cfg_grp.attrs.get("nu", 1)),
-            dt=float(cfg_grp.attrs.get("dt", 0.1)),
-
-            constraints=Constraints.from_hdf5(cfg_grp),
-            model=LinearSystem.from_hdf5(cfg_grp),
-            cost=LinearLSCost.from_hdf5(cfg_grp),
+        base_grp = cfg_global if cfg_global is not None else cfg_local
+        cfg = cls(
+            T_sim=int(base_grp.attrs.get("T_sim", 0)),
+            N=int(base_grp.attrs.get("N", 10)),
+            nx=int(base_grp.attrs.get("nx", 2)),
+            nu=int(base_grp.attrs.get("nu", 1)),
+            dt=float(base_grp.attrs.get("dt", 0.1)),
+            constraints=Constraints.from_hdf5(base_grp),
+            model=LinearSystem.from_hdf5(base_grp),
+            cost=LinearLSCost.from_hdf5(base_grp),
         )
 
-    def to_hdf5(self, grp: h5py.Group) -> None:
-        """Save config to a trajectory group (creates a `config` subgroup)."""
-        cfg_grp = grp.create_group("config")
-        cfg_grp.attrs["T_sim"] = int(self.T_sim)
-        cfg_grp.attrs["N"] = int(self.N)
-        cfg_grp.attrs["nx"] = int(self.nx)
-        cfg_grp.attrs["nu"] = int(self.nu)
-        cfg_grp.attrs["dt"] = float(self.dt)
+        if cfg_local is None or cfg_local is base_grp:
+            return cfg
 
-        self.constraints.to_hdf5(cfg_grp)
-        self.model.to_hdf5(cfg_grp)
-        self.cost.to_hdf5(cfg_grp)
+        # Override scalars if present locally
+        if "T_sim" in cfg_local.attrs:
+            cfg.T_sim = int(cfg_local.attrs["T_sim"])
+        if "N" in cfg_local.attrs:
+            cfg.N = int(cfg_local.attrs["N"])
+        if "nx" in cfg_local.attrs:
+            cfg.nx = int(cfg_local.attrs["nx"])
+        if "nu" in cfg_local.attrs:
+            cfg.nu = int(cfg_local.attrs["nu"])
+        if "dt" in cfg_local.attrs:
+            cfg.dt = float(cfg_local.attrs["dt"])
+
+        # Override constraints if present locally
+        local_cons = cfg_local.get("constraints", None)
+        if local_cons is not None:
+            if "x0" in local_cons:
+                cfg.constraints.x0 = local_cons["x0"][:]
+            if "lbx" in local_cons:
+                cfg.constraints.lbx = local_cons["lbx"][:]
+            if "ubx" in local_cons:
+                cfg.constraints.ubx = local_cons["ubx"][:]
+            if "lbu" in local_cons:
+                cfg.constraints.lbu = local_cons["lbu"][:]
+            if "ubu" in local_cons:
+                cfg.constraints.ubu = local_cons["ubu"][:]
+            if "lbx_e" in local_cons:
+                cfg.constraints.lbx_e = local_cons["lbx_e"][:]
+            if "ubx_e" in local_cons:
+                cfg.constraints.ubx_e = local_cons["ubx_e"][:]
+
+        # Override model if present locally
+        local_model = cfg_local.get("linear_system", None)
+        if local_model is not None:
+            if "A" in local_model:
+                cfg.model.A = local_model["A"][:]
+            if "B" in local_model:
+                cfg.model.B = local_model["B"][:]
+            if "gd" in local_model:
+                cfg.model.gd = local_model["gd"][:]
+
+        # Override cost if present locally
+        local_cost = cfg_local.get("cost", None)
+        if local_cost is not None:
+            if "Vx" in local_cost:
+                cfg.cost.Vx = local_cost["Vx"][:]
+            if "Vu" in local_cost:
+                cfg.cost.Vu = local_cost["Vu"][:]
+            if "W" in local_cost:
+                cfg.cost.W = local_cost["W"][:]
+            if "yref" in local_cost:
+                cfg.cost.yref = local_cost["yref"][:]
+            if "Vx_e" in local_cost:
+                cfg.cost.Vx_e = local_cost["Vx_e"][:]
+            if "W_e" in local_cost:
+                cfg.cost.W_e = local_cost["W_e"][:]
+            if "yref_e" in local_cost:
+                cfg.cost.yref_e = local_cost["yref_e"][:]
+            if "stage_scale" in local_cost.attrs:
+                cfg.cost.stage_scale = float(local_cost.attrs["stage_scale"])
+            if "terminal_scale" in local_cost.attrs:
+                cfg.cost.terminal_scale = float(local_cost.attrs["terminal_scale"])
+
+        return cfg
+
+    def to_hdf5(
+        self,
+        grp: h5py.Group,
+        exclude_attrs: Optional[set] = None,
+        exclude_constraints: Optional[set] = None,
+        exclude_model: Optional[set] = None,
+        exclude_cost: Optional[set] = None,
+        group_name: str = "config",
+    ) -> None:
+        """Save config to a trajectory group (creates a `config` subgroup)."""
+        exclude_attrs = exclude_attrs or set()
+        attr_fields = set(self.__dataclass_fields__.keys()).difference({"constraints", "model", "cost"})
+        constraint_fields = set(self.constraints.__dataclass_fields__.keys())
+        model_fields = set(self.model.__dataclass_fields__.keys())
+        cost_fields = set(self.cost.__dataclass_fields__.keys())
+
+        if (
+            attr_fields.issubset(exclude_attrs)
+            and constraint_fields.issubset(exclude_constraints or set())
+            and model_fields.issubset(exclude_model or set())
+            and cost_fields.issubset(exclude_cost or set())
+        ):
+            return
+
+        cfg_grp = grp.create_group(group_name)
+        if "T_sim" not in exclude_attrs:
+            cfg_grp.attrs["T_sim"] = int(self.T_sim)
+        if "N" not in exclude_attrs:
+            cfg_grp.attrs["N"] = int(self.N)
+        if "nx" not in exclude_attrs:
+            cfg_grp.attrs["nx"] = int(self.nx)
+        if "nu" not in exclude_attrs:
+            cfg_grp.attrs["nu"] = int(self.nu)
+        if "dt" not in exclude_attrs:
+            cfg_grp.attrs["dt"] = float(self.dt)
+
+        self.constraints.to_hdf5(cfg_grp, exclude_fields=exclude_constraints)
+        self.model.to_hdf5(cfg_grp, exclude_fields=exclude_model)
+        self.cost.to_hdf5(cfg_grp, exclude_fields=exclude_cost)
 
 
 @dataclass
@@ -652,7 +798,10 @@ class MPCDataset:
         # Open file in read mode if it exists
         if self.file_path and self.file_path.exists():
             self._h5_file = h5py.File(self.file_path, 'r')
-            self._indices = sorted(list(self._h5_file.keys()), key=lambda x: int(x.split('_')[1]))
+            self._indices = sorted(
+                [k for k in self._h5_file.keys() if k.startswith("traj_")],
+                key=lambda x: int(x.split('_')[1])
+            )
 
     def add(self, entry: MPCData):
         """Add to temporary memory buffer (for generation phase)."""
@@ -662,27 +811,115 @@ class MPCDataset:
     def save(self, path: Path = None, mode: str = 'w', save_ocp_trajs: bool = True) -> None:
         """Flushes memory buffer to HDF5."""
         target_path = Path(path) if path else self.file_path
-        if not target_path: 
-            raise ValueError("No path provided")
+        if not target_path: raise ValueError("No path provided")
         target_path.parent.mkdir(parents=True, exist_ok=True)
 
         with h5py.File(target_path, mode) as f:
-            start_idx = len(f.keys())
+            global_exclusions = self._handle_global_config(f)
+            start_idx = len([k for k in f.keys() if k.startswith("traj_")])
             for i, entry in enumerate(self.memory_buffer):
-                group_name = f"traj_{start_idx + i}"
-                grp = f.create_group(group_name)
+                self._save_entry(f.create_group(f"traj_{start_idx + i}"), entry, global_exclusions, save_ocp_trajs)
 
-                entry.config.to_hdf5(grp)
-                entry.trajectory.to_hdf5(grp, save_ocp_trajs)
-                entry.meta.to_hdf5(grp)
-                grp.attrs["feasible"] = entry.trajectory.feasible
-        
-        # Clear buffer and reload file to refresh indices
+        self._refresh_after_save(target_path)
+
+    def _refresh_after_save(self, path: Path) -> None:
         self.memory_buffer = []
-        self.file_path = target_path
+        self.file_path = path
         if self._h5_file: self._h5_file.close()
         self._h5_file = h5py.File(self.file_path, 'r')
-        self._indices = sorted(list(self._h5_file.keys()), key=lambda x: int(x.split('_')[1]))
+        self._indices = sorted(
+            [k for k in self._h5_file.keys() if k.startswith("traj_")],
+            key=lambda x: int(x.split('_')[1])
+        )
+
+    def _handle_global_config(self, f: h5py.File) -> Dict[str, Set[str]]:
+        if "global_config" in f:
+            return self._read_existing_global_config(f["global_config"])
+
+        if self.memory_buffer:
+            common = self._find_common_config_fields()
+            if any(len(v) > 0 for v in common.values()):
+                self._write_global_config(f, self.memory_buffer[0].config, common)
+                return common
+
+        return {k: set() for k in ["attrs", "constraints", "model", "cost"]}
+
+    def _save_entry(self, grp: h5py.Group, entry: MPCData, exclusions: Dict[str, Set[str]], save_ocp: bool) -> None:
+        entry.config.to_hdf5(
+            grp,
+            exclude_attrs=exclusions["attrs"],
+            exclude_constraints=exclusions["constraints"],
+            exclude_model=exclusions["model"],
+            exclude_cost=exclusions["cost"],
+            group_name="config"
+        )
+        entry.trajectory.to_hdf5(grp, save_ocp)
+        entry.meta.to_hdf5(grp)
+        grp.attrs["feasible"] = entry.trajectory.feasible
+
+    def _get_field_map(self) -> Dict[str, List[str]]:
+        """Returns a mapping of config category to list of field names."""
+        return {
+            "attrs": sorted(set(MPCConfig.__dataclass_fields__.keys()) - {"constraints", "model", "cost"}),
+            "constraints": sorted(Constraints.__dataclass_fields__.keys()),
+            "model": sorted(LinearSystem.__dataclass_fields__.keys()),
+            "cost": sorted(LinearLSCost.__dataclass_fields__.keys()),
+        }
+
+    def _find_common_config_fields(self) -> Dict[str, Set[str]]:
+        """Identifies fields that are constant across the memory buffer."""
+        if not self.memory_buffer: return {}
+        
+        first = self.memory_buffer[0].config
+        candidates = {k: set(v) for k, v in self._get_field_map().items()}
+
+        for entry in self.memory_buffer[1:]:
+            cfg = entry.config
+            for cat, names in candidates.items():
+                for name in list(names): 
+                    val_cur = self._get_config_value(cfg, cat, name)
+                    val_ref = self._get_config_value(first, cat, name)
+                    if not _values_equal(val_cur, val_ref):
+                        names.discard(name)
+        return candidates
+
+    def _get_config_value(self, cfg: MPCConfig, category: str, name: str):
+        if category == "attrs": return getattr(cfg, name)
+        if category == "constraints": return getattr(cfg.constraints, name)
+        if category == "model": return getattr(cfg.model, name)
+        if category == "cost": return getattr(cfg.cost, name)
+        return None
+
+    def _read_existing_global_config(self, grp: h5py.Group) -> Dict[str, Set[str]]:
+        field_map = self._get_field_map()
+        exclusions = {}
+        
+        exclusions["attrs"] = {k for k in field_map["attrs"] if k in grp.attrs}
+        
+        sub = grp.get("constraints")
+        exclusions["constraints"] = {k for k in field_map["constraints"] if k in sub} if sub else set()
+
+        sub = grp.get("linear_system")
+        exclusions["model"] = {k for k in field_map["model"] if k in sub} if sub else set()
+
+        sub = grp.get("cost")
+        exclusions["cost"] = {k for k in field_map["cost"] if (k in sub or k in sub.attrs)} if sub else set()
+        
+        return exclusions
+
+    def _write_global_config(self, f: h5py.File, cfg: MPCConfig, fields: Dict[str, Set[str]]) -> None:
+        field_map = self._get_field_map()
+        exclusions = {k: set(field_map[k]) - fields[k] for k in field_map}
+
+        cfg.to_hdf5(
+            f,
+            exclude_attrs=exclusions["attrs"],
+            exclude_constraints=exclusions["constraints"],
+            exclude_model=exclusions["model"],
+            exclude_cost=exclusions["cost"],
+            group_name="global_config"
+        )
+
 
     @classmethod
     def load(cls, path: Path) -> 'MPCDataset':
@@ -759,14 +996,28 @@ class MPCDataset:
             meta = MPCMeta.from_hdf5(grp)
             row = {}
             cfg_grp = grp.get("config", None)
+            global_cfg = self._h5_file.get("global_config", None)
+            base_attrs = global_cfg.attrs if global_cfg is not None else {}
+
+            row.update({
+                "T_sim": int(base_attrs.get("T_sim", 0)),
+                "N": int(base_attrs.get("N", 10)),
+                "nx": int(base_attrs.get("nx", 2)),
+                "nu": int(base_attrs.get("nu", 1)),
+                "dt": float(base_attrs.get("dt", 0.1)),
+            })
+
             if cfg_grp is not None:
-                row.update({
-                    "T_sim": int(cfg_grp.attrs.get("T_sim", 0)),
-                    "N": int(cfg_grp.attrs.get("N", 10)),
-                    "nx": int(cfg_grp.attrs.get("nx", 2)),
-                    "nu": int(cfg_grp.attrs.get("nu", 1)),
-                    "dt": float(cfg_grp.attrs.get("dt", 0.1)),
-                })
+                if "T_sim" in cfg_grp.attrs:
+                    row["T_sim"] = int(cfg_grp.attrs["T_sim"])
+                if "N" in cfg_grp.attrs:
+                    row["N"] = int(cfg_grp.attrs["N"])
+                if "nx" in cfg_grp.attrs:
+                    row["nx"] = int(cfg_grp.attrs["nx"])
+                if "nu" in cfg_grp.attrs:
+                    row["nu"] = int(cfg_grp.attrs["nu"])
+                if "dt" in cfg_grp.attrs:
+                    row["dt"] = float(cfg_grp.attrs["dt"])
                 
             row.update(asdict(meta))
             row['original_index'] = len(self.memory_buffer) + i
