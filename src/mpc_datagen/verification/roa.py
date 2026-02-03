@@ -64,7 +64,7 @@ class ROACertifier:
         else:
             return None
 
-    def compute_max_c(self) -> float:
+    def compute_min_c(self) -> float:
         """
         Iterates over all constraints in the config and returns the maximum level set value c.
         
@@ -109,7 +109,7 @@ class ROACertifier:
         __logger__.info(f"Computed max ROA level set c = {c_min:.4f}")
         return c_min
 
-    def get_levelset_points(self, n_points: int = 200) -> np.ndarray:
+    def roa_bounds(self, n_points: int = 200) -> np.ndarray:
         """
         Generates points on the boundary of the ellipsoid $V(x) = x^T P x = c$.
         
@@ -129,8 +129,10 @@ class ROACertifier:
         -------
         boundary : np.ndarray 
             Matrix of shape (n_points, nx) with the coordinates of the boundary points.
+        c_value : float
+            The level set value c used.
         """
-        c_value = self.compute_max_c()
+        c_value = self.compute_min_c()
         nx = self.cfg.nx
         
         # Random directions of the unit sphere in $\mathcal{R}^{nx}$
@@ -148,11 +150,6 @@ class ROACertifier:
             L = vecs @ np.diag(np.sqrt(vals))
 
         # $x = L * z * \sqrt{c}$
-        scaling = np.sqrt(c_value)
-        x_boundary = (L @ z) * scaling
+        boundary = (L @ z) * np.sqrt(c_value)
         
-        return x_boundary.T
-    
-    def is_state_in_roa(self, x: np.ndarray, c_max: float) -> bool:
-        """Quickly checks if a state x lies within the certified ROA."""
-        return (x.T @ self.P @ x) <= c_max
+        return boundary.T, c_value

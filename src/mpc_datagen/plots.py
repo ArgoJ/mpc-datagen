@@ -641,178 +641,116 @@ def cost_descent(
 
     return fig
 
-def plot_roa_landscape(
-    dataset: MPCDataset,
+def roa(
+    lyapunov_func: Callable[[np.ndarray], np.ndarray],
+    c_level: float,
+    bounds: np.ndarray,  # shape (n_points, nx)
     state_indices: List[int] = [0, 1],
     state_labels: Optional[List[str]] = None,
     limits: Optional[List[Tuple[float, float]]] = None,
     resolution: int = 100,
     plot_3d: bool = False,
     html_path: Optional[str] = None
-):
-    """
-    Erstellt einen Plotly-Graphen für die Region of Attraction (ROA).
+) -> go.Figure:
     
-    Features:
-    - Visualisiert die Lyapunov-Funktion V(x) = x^T P x als Heatmap (2D) oder Surface (3D).
-    - Zeichnet die ROA-Grenze (Level-Set c_max) als exakte Ellipse ein.
-    - Überlagert Trajektorien aus dem Dataset.
-    
-    Args:
-        certifier: Instanz von ROACertifier (muss .P Attribut haben).
-        c_max: Der berechnete maximale Level-Set Wert.
-        dataset: Liste von MPCDataset Items (optional).
-        state_indices: Welche zwei Zustände geplottet werden sollen (Schnitt durch 0).
-        plot_3d: Wenn True, wird ein 3D Surface Plot erstellt.
-    """
-    
-    # 1. Indizes & Labels setup
+    if len(state_indices) != 2:
+        raise ValueError("state_indices must contain exactly 2 indices.")
+
     idx_x, idx_y = state_indices
+    
     if state_labels is None:
-        state_labels = [f"x_{idx_x}", f"x_{idx_y}"]
+        state_labels = [f"State {idx_x}", f"State {idx_y}"]
+    
+    if limits is None:
+        limits = [(-2.0, 2.0), (-2.0, 2.0)]
 
-    # 2. Relevante Sub-Matrix P extrahieren (Schnitt durch den Ursprung angenommen)
-    # V_slice(x_2d) = [x, y] @ P_slice @ [x, y].T
-    P_slice = certifier.P[np.ix_([idx_x, idx_y], [idx_x, idx_y])]
-
-    # 4. Grid Berechnung (Vektorsiert für Performance)
+    # Grid for Lyapunov function
     x_vec = np.linspace(limits[0][0], limits[0][1], resolution)
     y_vec = np.linspace(limits[1][0], limits[1][1], resolution)
     X, Y = np.meshgrid(x_vec, y_vec)
     
-    # Flache Liste von (x, y) Punkten erstellen
-    points = np.vstack([X.ravel(), Y.ravel()]).T
+    dim_x = max(max(state_indices) + 1, bounds.shape[1])
+    points_2d = np.vstack([X.ravel(), Y.ravel()]).T
+    full_points = np.zeros((points_2d.shape[0], dim_x))
+    full_points[:, idx_x] = points_2d[:, 0]
+    full_points[:, idx_y] = points_2d[:, 1]
     
-    # V(x) berechnen: diag(points @ P @ points.T) effizienter:
-    # V = sum(points * (points @ P^T), axis=1)
-    Z_flat = np.sum(points * (points @ P_slice.T), axis=1)
+    Z_flat = lyapunov_func(full_points)
     Z = Z_flat.reshape(X.shape)
 
     fig = go.Figure()
 
-    # --- PLOT: Lyapunov Funktion ---
+    # --- Lyapunov Function V(x) ---
     if plot_3d:
-        # 3D Surface
         fig.add_trace(go.Surface(
             z=Z, x=x_vec, y=y_vec,
             colorscale='Viridis', opacity=0.8,
-            name='Lyapunov Function', showscale=True,
-            # Konturlinie auf der Surface bei c_max (Rot)
-            contours = {
-                "z": {"show": True, "start": c_max, "end": c_max, "size": 0, "color": "red", "width": 5}
-            }
-        ))
-        # Optional: Transparente Ebene ("Wasserstand") bei c_max
-        z_plane = np.full_like(Z, c_max)
-        fig.add_trace(go.Surface(
-            z=z_plane, x=x_vec, y=y_vec,
-            colorscale=[[0, 'red'], [1, 'red']], opacity=0.1, showscale=False, name='ROA Level'
+            name='Lyapunov Surface', showlegend=True,
+            colorbar=dict(title="V(x)", x=-0.1)
         ))
     else:
-        # 2D Contour Plot
         fig.add_trace(go.Contour(
             z=Z, x=x_vec, y=y_vec,
-            colorscale='Viridis',
-            # Konturlinien bis zum Maximum, mit einer Referenzlinie bei c_max
-            contours=dict(start=0, end=np.max(Z), size=c_max/2),
-            name='V(x)', opacity=0.6, showscale=True
+            colorscale='Viridis', name='V(x) Contours',
+            opacity=0.6, contours=dict(showlabels=True),
+            showlegend=True
         ))
 
-        # --- PLOT: ROA Grenze als glatte Ellipse ---
-        # Parametrische Generierung für Vektorgrafik-Qualität
-        theta = np.linspace(0, 2*np.pi, 200)
-        circle = np.vstack([np.cos(theta), np.sin(theta)])
-        
-        try:
-            # Transformation: x = sqrt(c) * L * unit_circle
-            # L kommt aus Cholesky von P^-1
-            P_inv_slice = np.linalg.inv(P_slice)
-            L = np.linalg.cholesky(P_inv_slice)
-            ellipse = (L @ circle) * np.sqrt(c_max)
-            
-            fig.add_trace(go.Scatter(
-                x=ellipse[0, :], y=ellipse[1, :],
-                mode='lines',
-                line=dict(color='red', width=3, dash='dash'),
-                name=f'ROA Limit (c={c_max:.2f})'
-            ))
-        except np.linalg.LinAlgError:
-            pass # Fallback auf Contour-Darstellung
+    # --- ROA Boundary (Scatter/Line) ---
+    b_x = bounds[:, idx_x]
+    b_y = bounds[:, idx_y]
+    # For 3D, we need to calculate V(x) for the bounds (should be approximately c_level)
+    b_z = np.full(b_x.shape, c_level + 0.01) # Slightly offset for visibility
+    if plot_3d:
+        # Points as red line/markers in 3D space
+        fig.add_trace(go.Scatter3d(
+            x=b_x, y=b_y, z=b_z,
+            mode='lines+markers',
+            marker=dict(size=3, color='red'),
+            line=dict(color='red', width=4),
+            name=f'ROA Boundary (c={c_level:.2f})'
+        ))
+        # Optional: Transparent plane for better orientation
+        z_plane = np.full_like(Z, c_level)
+        fig.add_trace(go.Surface(
+            z=z_plane, x=x_vec, y=y_vec,
+            colorscale=[[0, 'rgba(255,0,0,0.2)'], [1, 'rgba(255,0,0,0.2)']],
+            showscale=False, name='Safety Level', showlegend=False
+        ))
+    else:
+        # In 2D plot the exact points of the ellipse
+        fig.add_trace(go.Scatter(
+            x=b_x, y=b_y,
+            mode='lines', # 'lines' closes the ellipse nicer than 'markers'
+            line=dict(color='red', width=3, dash='dash'),
+            fill='toself', # Optional: Slightly fill the area
+            fillcolor='rgba(255,0,0,0.1)',
+            name=f'ROA Boundary (c={c_level:.2f})'
+        ))
 
-    # --- PLOT: Trajektorien ---
-    trajectory_indices = []
-    if dataset:
-        for idx, item in enumerate(dataset):
-            traj = item.trajectory # Zugriff anpassen falls Struktur anders ist
-            color = COLORS[idx % len(COLORS)]
-            
-            # Daten extrahieren
-            x_traj = traj.states[:, idx_x]
-            y_traj = traj.states[:, idx_y]
-            
-            if plot_3d:
-                # Z-Werte berechnen (Lyapunov entlang der Trajektorie)
-                # Wir nutzen hier P des Zertifizierers für Konsistenz
-                states = traj.states
-                # V = x^T P x (Summe über alle Dimensionen des Systems!)
-                z_traj = np.sum(states * (states @ certifier.P.T), axis=1)
-                
-                fig.add_trace(go.Scatter3d(
-                    x=x_traj, y=y_traj, z=z_traj,
-                    mode='lines', line=dict(color=color, width=4),
-                    name=f'Run {idx}'
-                ))
-            else:
-                fig.add_trace(go.Scatter(
-                    x=x_traj, y=y_traj,
-                    mode='lines', line=dict(color=color, width=2),
-                    name=f'Run {idx}'
-                ))
-            
-            trajectory_indices.append(len(fig.data) - 1)
-
-    # --- Layout & Buttons ---
-    title = f"ROA Certificate (c={c_max:.2f}) - {state_labels[0]} vs {state_labels[1]}"
-    
+    # --- Layout ---
     layout_args = dict(
-        title=title,
-        width=1000 if plot_3d else 800,
-        height=800 if plot_3d else 700,
-        autosize=False
+        title=f"Stability Verification: ROA for c={c_level:.2f}",
+        legend=dict(x=1.05, y=1),
+        autosize=True,
+        margin=dict(l=0, r=50, b=0, t=50)
     )
     
     if plot_3d:
         layout_args['scene'] = dict(
             xaxis_title=state_labels[0],
             yaxis_title=state_labels[1],
-            zaxis_title="Lyapunov V(x)"
+            zaxis_title="V(x)"
         )
     else:
         layout_args['xaxis_title'] = state_labels[0]
         layout_args['yaxis_title'] = state_labels[1]
-        layout_args['yaxis'] = dict(scaleanchor="x", scaleratio=1) # 1:1 Aspect Ratio
+        layout_args['yaxis'] = dict(scaleanchor="x", scaleratio=1)
 
     fig.update_layout(**layout_args)
 
-    # Interaktiver Button für Trajektorien
-    if dataset:
-        fig.update_layout(
-            updatemenus=[dict(
-                type="buttons", direction="left", x=1.0, y=-0.1,
-                buttons=[dict(
-                    label="Toggle Trajectories",
-                    method="restyle",
-                    # Toggle visibility für die Trajektorien-Traces
-                    args=[{"visible": 'legendonly'}, trajectory_indices],
-                    args2=[{"visible": True}, trajectory_indices]
-                )]
-            )]
-        )
-
-    # Speichern oder Anzeigen
     if html_path:
         os.makedirs(os.path.dirname(html_path), exist_ok=True)
         fig.write_html(html_path)
-        print(f"Plot gespeichert unter: {html_path}")
-    else:
-        fig.show()
+    
+    return fig
