@@ -12,8 +12,12 @@ from typing import Optional, Tuple
 import mpc_datagen.linalg as mdg_linalg
 import mpc_datagen.plots as mdg_plots
 from mpc_datagen import *
-from mpc_datagen.verification import StabilityCertifier, StabilityVerifier, VerificationRender
-
+from mpc_datagen.verification import (
+    StabilityCertifier,
+    StabilityVerifier,
+    VerificationRender,
+    ROACertifier,
+)
 
 
 
@@ -250,14 +254,26 @@ if __name__ == "__main__":
             time_bound=T_sim * dt,
             html_path=f"plots/double_integrator_{terminal_mode}_N{N}_trajectories.html",)
         
-        if info["P"] is not None:
+        P = info["P"]
+        if P is not None:
+            lyap_fun = lambda x: 0.5 * mdg_linalg.weighted_quadratic_norm(x, P)
             mdg_plots.lyapunov(
                 dataset=subdataset,
-                lyapunov_func=lambda x: 0.5 * x.T @ info["P"] @ x,
+                lyapunov_func=lyap_fun,
                 state_labels=["x", "v"],
                 plot_3d=True,
                 use_optimal_v=False,
                 html_path=f"plots/double_integrator_{terminal_mode}_N{N}_lyapunov.html",)
+            
+            roa_cert = ROACertifier(subdataset[0].config)
+            roa_bounds, c_min = roa_cert.roa_bounds()
+            mdg_plots.roa(
+                lyapunov_func=lyap_fun,
+                c_level=c_min,
+                roa_bounds=roa_bounds,
+                state_labels=["x", "v"],
+                html_path=f"plots/double_integrator_{terminal_mode}_N{N}_roa.html",
+            )
         
 
     # Case 1: regional terminal cost + small terminal set (should pass regional proof + empirical)

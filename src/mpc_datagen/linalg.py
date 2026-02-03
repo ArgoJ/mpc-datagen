@@ -3,6 +3,26 @@ import casadi as ca
 
 from typing import Tuple
 
+def weighted_quadratic_norm(x: np.ndarray, W: np.ndarray) -> np.ndarray:
+    """
+    Calculate $||x||_W^2 = x^T * W * x$ for a batch of vectors.
+
+    Parameters
+    ----------
+    x : np.ndarray
+        Input array of shape (N, nx) or (nx,).
+    W : np.ndarray
+        Weight matrix of shape (nx, nx).
+
+    Returns
+    -------
+    norm : np.ndarray
+        Resulting array of shape (N,) or a scalar.
+    """
+    if x.ndim == 1:
+        return x.T @ W @ x
+    return np.einsum('ij,jk,ik->i', x, W, x)
+
 def as_vec(x: np.ndarray, n: int, name: str) -> np.ndarray:
     x = np.asarray(x, dtype=float).reshape(-1)
     if x.shape != (n,):

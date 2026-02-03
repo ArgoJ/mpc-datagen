@@ -14,7 +14,9 @@ __logger__ = PackageLogger.get_logger(__name__)
 def ensure_linear_ls_cost_type(cost_type: Literal['LINEAR_LS', 'NONLINEAR_LS']) -> None:
     """Ensure that only LINEAR_LS cost type is used."""
     if cost_type != 'LINEAR_LS':
-        raise NotImplementedError("Only LINEAR_LS cost type is supported in this verifier.")
+        __logger__.warning("Only LINEAR_LS cost type is supported.")
+        return False
+    return True
 
 def _is_none(*values: Optional[Any]) -> Any:
     """Ensure that a value is not None, otherwise raise an error."""

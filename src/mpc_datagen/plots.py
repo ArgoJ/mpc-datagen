@@ -256,7 +256,7 @@ def lyapunov(
 
     # Infer dimensions
     first_traj = dataset[0].trajectory
-    num_states = first_traj.states.shape[1]
+    nx = first_traj.states.shape[1]
     
     if len(state_indices) != 2:
         raise ValueError("state_indices must contain exactly 2 indices.")
@@ -283,27 +283,18 @@ def lyapunov(
             (min_y - pad_y, max_y + pad_y)
         ]
 
-    # Create grid for Lyapunov function
-    x_range = np.linspace(limits[0][0], limits[0][1], resolution)
-    y_range = np.linspace(limits[1][0], limits[1][1], resolution)
-    X, Y = np.meshgrid(x_range, y_range)
-    
     # Prepare grid points for evaluation
-    grid_points = np.zeros((X.size, num_states))
-    grid_points[:, idx_x] = X.flatten()
-    grid_points[:, idx_y] = Y.flatten()
+    x_vec = np.linspace(limits[0][0], limits[0][1], resolution)
+    y_vec = np.linspace(limits[1][0], limits[1][1], resolution)
+    X, Y = np.meshgrid(x_vec, y_vec)
     
     # Evaluate Lyapunov function
-    try:
-        Z_flat = lyapunov_func(grid_points)
-    except Exception:
-        Z_flat = np.array([lyapunov_func(s) for s in grid_points])
-        
-    if hasattr(Z_flat, 'ndim') and Z_flat.ndim > 1:
-        Z_flat = Z_flat.flatten()
-    elif isinstance(Z_flat, list):
-        Z_flat = np.array(Z_flat)
-        
+    points_2d = np.vstack([X.ravel(), Y.ravel()]).T
+    full_points = np.zeros((points_2d.shape[0], nx))
+    full_points[:, idx_x] = points_2d[:, 0]
+    full_points[:, idx_y] = points_2d[:, 1]
+    
+    Z_flat = lyapunov_func(full_points)
     Z = Z_flat.reshape(X.shape)
 
     fig = go.Figure()
@@ -313,8 +304,8 @@ def lyapunov(
         fig.add_trace(
             go.Surface(
                 z=Z,
-                x=x_range,
-                y=y_range,
+                x=X,
+                y=Y,
                 colorscale='Viridis',
                 name='Lyapunov Function',
                 opacity=0.8,
@@ -325,8 +316,8 @@ def lyapunov(
         fig.add_trace(
             go.Contour(
                 z=Z,
-                x=x_range,
-                y=y_range,
+                x=X,
+                y=Y,
                 colorscale='Viridis',
                 name='Lyapunov Function',
                 showscale=True,

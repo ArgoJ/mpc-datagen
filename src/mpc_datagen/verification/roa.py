@@ -5,7 +5,7 @@ from typing import List, Optional
 from ..mpc_data import MPCConfig
 from ..package_logger import PackageLogger
 from ..extractor import extract_QR
-from ..linalg import discretize_and_linearize_rk4, lin_c2d_rk4, sym
+from ..linalg import lin_c2d_rk4, sym
 
 __logger__ = PackageLogger.get_logger(__name__)
 

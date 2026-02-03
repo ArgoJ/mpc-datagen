@@ -640,12 +640,10 @@ class StabilityCertifier:
             cer.cfg.cost.W,
             cer.cfg.cost.Vx,
             cer.cfg.cost.Vu,
-            solver.acados_ocp.cost.cost_type,
         )
         Qf = extract_Qf(
             cer.cfg.cost.W_e,
             cer.cfg.cost.Vx_e,
-            solver.acados_ocp.cost.cost_type_e
         )
         x_ref, u_ref = extract_stage_reference(
             cer.cfg.cost.yref,
