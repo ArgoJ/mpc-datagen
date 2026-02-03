@@ -79,7 +79,8 @@ class ROACertifier:
         candidates: List[float] = []
     
         def add(h, k, n):
-            val = self._calc_limit_c(h, k, n)
+            abs_k = abs(k)
+            val = self._calc_limit_c(h, abs_k, n)
             if val is not None:
                 candidates.append(val)
 
@@ -88,7 +89,7 @@ class ROACertifier:
             for i in range(nx):
                 ei = np.zeros(nx); ei[i] = 1.0
                 add(ei, cons.ubx[i], f"x_{i}_max")      # x_i <= ubx
-                add(-ei, -cons.lbx[i], f"x_{i}_min")    # -x_i <= -lbx
+                add(-ei, cons.lbx[i], f"x_{i}_min")    # -x_i <= -lbx
 
         # Input Constraints
         if cons.has_bu():
@@ -99,7 +100,7 @@ class ROACertifier:
                 
                 # u_j >= lbu  => u_j >= lbu => -Kx >= lbu => Kx <= -lbu
                 # kj^T x <= -lbu
-                add(kj, -cons.lbu[j], f"u_{j}_min")
+                add(kj, cons.lbu[j], f"u_{j}_min")
 
         if not candidates:
             __logger__.info("No active constraints found. ROA is unbounded.")
