@@ -15,6 +15,24 @@ COLORS = [
     '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf'
 ]
 
+
+def _order_boundary_points_xy(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    """Order 2D boundary points by polar angle around centroid.
+
+    This is useful when `bounds` is an unordered point cloud on a closed curve.
+    """
+    x = np.asarray(x, dtype=float).reshape(-1)
+    y = np.asarray(y, dtype=float).reshape(-1)
+    if x.size != y.size:
+        raise ValueError("x and y must have the same number of points")
+    if x.size == 0:
+        return np.array([], dtype=int)
+
+    cx = float(np.mean(x))
+    cy = float(np.mean(y))
+    angles = np.arctan2(y - cy, x - cx)
+    return np.argsort(angles)
+
 def _plotly_multiline(x: np.ndarray, axis: int=0):
     if axis == 0:
         return np.hstack([x, np.full((x.shape[0], 1), np.nan)]).flatten()
@@ -628,7 +646,6 @@ def cost_descent(
     else:
         fig.show()
 
-
 def roa(
     lyapunov_func: Callable[[np.ndarray], np.ndarray],
     c_level: float,
@@ -638,6 +655,7 @@ def roa(
     limits: Optional[List[Tuple[float, float]]] = None,
     resolution: int = 100,
     plot_3d: bool = False,
+    show_level_plane: bool = False,
     html_path: Optional[str] = None
 ) -> None:
     
@@ -699,33 +717,42 @@ def roa(
     full_bounds[:, idx_x] = b_x
     full_bounds[:, idx_y] = b_y
     b_z = np.asarray(lyapunov_func(full_bounds), dtype=float).reshape(-1)
+
+    order = _order_boundary_points_xy(b_x, b_y)
+    b_x = np.asarray(b_x, dtype=float).reshape(-1)[order]
+    b_y = np.asarray(b_y, dtype=float).reshape(-1)[order]
+    b_z = np.asarray(b_z, dtype=float).reshape(-1)[order]
+
+    # Close the loop
+    if b_x.size > 0:
+        b_x = np.concatenate([b_x, b_x[:1]])
+        b_y = np.concatenate([b_y, b_y[:1]])
+        b_z = np.concatenate([b_z, b_z[:1]])
+
     if plot_3d:
-        # Points as red line/markers in 3D space
         fig.add_trace(go.Scatter3d(
             x=b_x, y=b_y, z=b_z,
-            mode='lines+markers',
-            marker=dict(size=3, color='red'),
+            mode='lines',
             line=dict(color='red', width=4),
             name=f'ROA Boundary (c={c_level:.2f})'
         ))
-        # Optional: Transparent plane for better orientation
-        z_plane = np.full_like(Z, c_level)
-        fig.add_trace(go.Surface(
-            z=z_plane, x=x_vec, y=y_vec,
-            colorscale=[[0, 'rgba(255,0,0,0.2)'], [1, 'rgba(255,0,0,0.2)']],
-            showscale=False, name='Safety Level', showlegend=False
-        ))
+
+        if show_level_plane:
+            z_plane = np.full_like(Z, c_level)
+            fig.add_trace(go.Surface(
+                z=z_plane, x=x_vec, y=y_vec,
+                colorscale=[[0, 'rgba(255,0,0,0.2)'], [1, 'rgba(255,0,0,0.2)']],
+                showscale=False, name='Safety Level', showlegend=False
+            ))
     else:
-        # In 2D plot the exact points of the ellipse
         fig.add_trace(go.Scatter(
             x=b_x, y=b_y,
-            mode='lines', # 'lines' closes the ellipse nicer than 'markers'
+            mode='lines',
             line=dict(color='red', width=3, dash='dash'),
-            fill='toself', # Optional: Slightly fill the area
+            fill='toself',
             fillcolor='rgba(255,0,0,0.1)',
             name=f'ROA Boundary (c={c_level:.2f})'
         ))
-
     # --- Layout ---
     layout_args = dict(
         title=f"Stability Verification: ROA for c={c_level:.2f}",

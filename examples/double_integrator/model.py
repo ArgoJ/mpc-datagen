@@ -274,6 +274,7 @@ if __name__ == "__main__":
                 bounds=roa_bounds,
                 state_labels=["x", "v"],
                 plot_3d=True,
+                show_level_plane=True,
                 html_path=f"plots/double_integrator_{terminal_mode}_N{N}_roa.html",
             )
         
