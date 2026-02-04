@@ -29,7 +29,7 @@ def mpc_trajectories(
     plot_predictions: bool = False,
     time_bound: Optional[float] = None,  
     html_path: Optional[str] = None
-) -> go.Figure:
+) -> None:
     """Plot MPC trajectories for states and controls using Plotly.
 
     Parameters
@@ -216,7 +216,7 @@ def mpc_trajectories(
         os.makedirs(os.path.dirname(html_path), exist_ok=True)
         fig.write_html(html_path, include_mathjax='cdn')
         __logger__.info(f"Trajectories plot saved to {html_path}.")
-    else:   
+    else:
         fig.show()
 
 def lyapunov(
@@ -229,7 +229,7 @@ def lyapunov(
     plot_3d: bool = False,
     html_path: Optional[str] = None,
     use_optimal_v: bool = False
-) -> Optional[go.Figure]:
+) -> None:
     """Plot the Lyapunov function landscape and MPC trajectories in 2D or 3D.
     Only two state dimensions can be visualized at once.
 
@@ -428,13 +428,13 @@ def lyapunov(
         os.makedirs(os.path.dirname(html_path), exist_ok=True)
         fig.write_html(html_path, include_mathjax='cdn')
         __logger__.info(f"Trajectories plot saved to {html_path}.")
-    else:   
+    else:
         fig.show()
 
 def relaxed_dp_residual(
     dataset: MPCDataset,
     html_path: Optional[str] = None
-) -> go.Figure:
+) -> None:
     """Plot Lyapunov-style one-step descent check.
 
     For each trajectory entry, plots
@@ -462,7 +462,7 @@ def relaxed_dp_residual(
     """
     if len(dataset) == 0:
         __logger__.warning("Dataset is empty.")
-        return go.Figure()
+        return
 
     fig = go.Figure()
 
@@ -537,12 +537,10 @@ def relaxed_dp_residual(
     else:
         fig.show()
 
-    return fig
-
 def cost_descent(
     dataset: MPCDataset,
     html_path: str = None
-) -> go.Figure:
+) -> None:
     """Plot cost descent check.
 
     For each trajectory entry, plots
@@ -568,7 +566,7 @@ def cost_descent(
     """
     if len(dataset) == 0:
         __logger__.warning("Dataset is empty.")
-        return go.Figure()
+        return
 
     fig = go.Figure()
 
@@ -630,7 +628,6 @@ def cost_descent(
     else:
         fig.show()
 
-    return fig
 
 def roa(
     lyapunov_func: Callable[[np.ndarray], np.ndarray],
@@ -642,7 +639,7 @@ def roa(
     resolution: int = 100,
     plot_3d: bool = False,
     html_path: Optional[str] = None
-) -> go.Figure:
+) -> None:
     
     if len(state_indices) != 2:
         raise ValueError("state_indices must contain exactly 2 indices.")
@@ -653,7 +650,14 @@ def roa(
         state_labels = [f"State {idx_x}", f"State {idx_y}"]
     
     if limits is None:
-        limits = [(-2.0, 2.0), (-2.0, 2.0)]
+        b_x = bounds[:, idx_x]
+        b_y = bounds[:, idx_y]
+        pad_x = 0.1 * max(1e-12, float(np.max(b_x) - np.min(b_x)))
+        pad_y = 0.1 * max(1e-12, float(np.max(b_y) - np.min(b_y)))
+        limits = [
+            (float(np.min(b_x) - pad_x), float(np.max(b_x) + pad_x)),
+            (float(np.min(b_y) - pad_y), float(np.max(b_y) + pad_y)),
+        ]
 
     # Grid for Lyapunov function
     x_vec = np.linspace(limits[0][0], limits[0][1], resolution)
@@ -690,8 +694,11 @@ def roa(
     # --- ROA Boundary (Scatter/Line) ---
     b_x = bounds[:, idx_x]
     b_y = bounds[:, idx_y]
-    # For 3D, we need to calculate V(x) for the bounds (should be approximately c_level)
-    b_z = np.full(b_x.shape, c_level + 0.01) # Slightly offset for visibility
+    # For 3D, compute V(x) for the boundary points to keep scaling consistent.
+    full_bounds = np.zeros((bounds.shape[0], dim_x))
+    full_bounds[:, idx_x] = b_x
+    full_bounds[:, idx_y] = b_y
+    b_z = np.asarray(lyapunov_func(full_bounds), dtype=float).reshape(-1)
     if plot_3d:
         # Points as red line/markers in 3D space
         fig.add_trace(go.Scatter3d(
@@ -743,5 +750,5 @@ def roa(
     if html_path:
         os.makedirs(os.path.dirname(html_path), exist_ok=True)
         fig.write_html(html_path)
-    
-    return fig
+    else:
+        fig.show()

@@ -5,7 +5,7 @@ from typing import List, Optional
 from ..mpc_data import MPCConfig
 from ..package_logger import PackageLogger
 from ..extractor import extract_QR
-from ..linalg import lin_c2d_rk4, sym
+from ..linalg import sym
 
 __logger__ = PackageLogger.get_logger(__name__)
 
@@ -26,9 +26,10 @@ class ROACertifier:
 
     def _solve_lqr(self):
         """Internal method: Solves Riccati equation based on Config costs."""
-        A = self.cfg.model.A
-        B = self.cfg.model.B
-        A, B = lin_c2d_rk4(A, B, self.cfg.dt)
+        # NOTE: cfg.model.A/B are already discrete-time matrices as extracted from acados
+        # (see MPCConfigExtractor._extract_discretized_dynamics). Do NOT discretize again.
+        A = np.asarray(self.cfg.model.A, dtype=float)
+        B = np.asarray(self.cfg.model.B, dtype=float)
 
         if A.shape[0] != A.shape[1] or A.shape[0] != B.shape[0]:
             raise ValueError(f"Model dimension mismatch: A={A.shape}, B={B.shape}")

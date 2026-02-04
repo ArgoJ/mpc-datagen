@@ -257,6 +257,7 @@ if __name__ == "__main__":
         P = info["P"]
         if P is not None:
             lyap_fun = lambda x: 0.5 * mdg_linalg.weighted_quadratic_norm(x, P)
+            roa_lyap_fun = lambda x: mdg_linalg.weighted_quadratic_norm(x, P)
             mdg_plots.lyapunov(
                 dataset=subdataset,
                 lyapunov_func=lyap_fun,
@@ -268,7 +269,7 @@ if __name__ == "__main__":
             roa_cert = ROACertifier(subdataset[0].config)
             roa_bounds, c_min = roa_cert.roa_bounds()
             mdg_plots.roa(
-                lyapunov_func=lyap_fun,
+                lyapunov_func=roa_lyap_fun,
                 c_level=c_min,
                 bounds=roa_bounds,
                 state_labels=["x", "v"],
@@ -286,7 +287,7 @@ if __name__ == "__main__":
         T_sim=25,
         n_samples=50,
         bounds_scale=10.0,
-        terminal_box_halfwidth=1.0,
+        terminal_box_halfwidth=2.0,
     )
 
     # Case 2: equilibrium terminal constraint x(N)=0 (sample close so feasibility is easy)
@@ -298,7 +299,7 @@ if __name__ == "__main__":
         T_sim=25,
         n_samples=50,
         bounds_scale=10.0,
-        terminal_box_halfwidth=1.0,
+        terminal_box_halfwidth=2.0,
     )
 
     # Case 3: no terminal ingredients (zero terminal weight, no terminal bounds)
@@ -310,5 +311,5 @@ if __name__ == "__main__":
         T_sim=25,
         n_samples=50,
         bounds_scale=50.0,
-        terminal_box_halfwidth=1.0,
+        terminal_box_halfwidth=2.0,
     )
