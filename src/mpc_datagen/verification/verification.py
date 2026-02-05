@@ -36,7 +36,6 @@ class StabilityVerifier:
         self._active_entry: Optional[MPCData] = None
         self.traj : Optional[MPCTrajectory] = None
         self.meta : Optional[MPCMeta] = None
-        self.valid : Optional[bool] = False
         
         self.cfg: Optional[MPCConfig] = None
         self.sys: Optional[LinearSystem] = None
@@ -58,8 +57,9 @@ class StabilityVerifier:
         for entry in self.dataset:
             yield entry
 
+
     # --- INTERNAL HELPERS ---
-    def _bind_entry(self, entry: MPCData) -> bool:
+    def _bind_entry(self, entry: MPCData) -> None:
         """Bind internal state to a specific trajectory entry."""
         self._active_entry = entry
 
@@ -69,6 +69,8 @@ class StabilityVerifier:
         
         if self.cfg is None:
             self.cfg = local_cfg
+        
+        self._require_bound_entry()
 
         if local_cfg.dt != self.cfg.dt:
             raise ValueError(
@@ -109,25 +111,11 @@ class StabilityVerifier:
                 "This verifier assumes terminal_cost for the entire dataset."
             )
 
-        self.valid = self._validate_data_integrity()
-        return self.valid
-
     def _require_bound_entry(self) -> None:
         if self._active_entry is None or self.traj is None or self.cfg is None:
             raise ValueError(
                 "No active entry is bound (internal error). Dataset-level methods must bind an entry before calling per-trajectory helpers."
             )
-
-    def _validate_data_integrity(self) -> bool:
-        """Check if OCP predictions (solved_states) are available for Lyapunov calculation."""
-        self._require_bound_entry()
-        # Empirical verification only requires stored value function and trajectories.
-        if self.traj.V_N is None or len(self.traj.V_N) == 0:
-            __logger__.warning(
-                f"Entry ID {getattr(self.meta, 'id', 'unknown')} missing stored cost; cannot verify Lyapunov decrease."
-            )
-            return False
-        return True
 
 
     # --- COST CALCULATIONS ---
@@ -247,9 +235,6 @@ class StabilityVerifier:
         stats : AlphaViolationStats
             The observed minimum alpha and maximum violation statistics.
         """
-        if not self.valid:
-            return AlphaViolationStats()
-
         min_alpha: float = float("inf")
         max_violation = 0.0
         min_residual = float("inf")
@@ -432,7 +417,7 @@ class StabilityVerifier:
     def verify(
         cls,
         dataset: MPCDataset,
-        solver: AcadosOcpSolver,
+        solver: Optional[AcadosOcpSolver] = None,
         alpha_required: float = 1e-4,
         min_cost_threshold: float = 1e-3,
     ) -> StabilityReport:
@@ -442,7 +427,7 @@ class StabilityVerifier:
         ----------
         dataset : MPCDataset
             The dataset containing MPC trajectories and configurations.
-        solver : AcadosOcpSolver
+        solver : AcadosOcpSolver, optional
             The Acados OCP solver instance used for linear stability verification.
         alpha_required : float
             Minimum empirical alpha required for verification.
