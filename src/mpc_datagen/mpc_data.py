@@ -4,14 +4,15 @@ import numpy as np
 import pandas as pd
 
 from dataclasses import dataclass, field, asdict
-from typing import List, Optional, Iterator, Tuple, Dict, Set
+from collections.abc import Iterator
 from pathlib import Path
 
+from .linalg import weighted_quadratic_norm
 from .package_logger import PackageLogger
 
 __logger__ = PackageLogger.get_logger(__name__)
 
-def _is_defined_array(arr: Optional[np.ndarray], not_zero: bool = True) -> bool:
+def _is_defined_array(arr: np.ndarray | None, not_zero: bool = True) -> bool:
     """Check if an array is defined and non-empty."""
     if arr is None:
         return False
@@ -22,7 +23,7 @@ def _is_defined_array(arr: Optional[np.ndarray], not_zero: bool = True) -> bool:
         return False
     return True 
 
-def _arrays_equal(a: Optional[np.ndarray], b: Optional[np.ndarray]) -> bool:
+def _arrays_equal(a: np.ndarray | None, b: np.ndarray | None) -> bool:
     """Robust array equality check for config comparisons."""
     if a is None or b is None:
         return False
@@ -51,7 +52,7 @@ class MPCMeta:
     solve_time_total: float = 0.0
     sim_duration_wall: float = 0.0
     steps_simulated: int = 0
-    status_codes: List[int] = field(default_factory=list)
+    status_codes: list[int] = field(default_factory=list)
 
     @classmethod
     def from_hdf5(cls, grp: h5py.Group) -> "MPCMeta":
@@ -84,7 +85,7 @@ class LinearSystem:
             gd=lin_sys_grp["gd"][:] if "gd" in lin_sys_grp else np.array([]),
         )
 
-    def to_hdf5(self, grp: h5py.Group, exclude_fields: Optional[set] = None) -> None:
+    def to_hdf5(self, grp: h5py.Group, exclude_fields: set | None = None) -> None:
         """Save linear system matrices to a trajectory group (creates a `linear_system` subgroup)."""
         exclude_fields = exclude_fields or set()
         field_names = list(self.__dataclass_fields__.keys())
@@ -142,27 +143,36 @@ class LinearLSCost:
     stage_scale: float = 1.0
     terminal_scale: float = 1.0
 
-    def get_stage_cost(self, x: np.ndarray, u: np.ndarray, use_scaled: bool = False) -> float:
-        """Compute the cost for a given output vector y."""
-        y = self.Vx @ x + self.Vu @ u
+    def get_stage_cost(self, x: np.ndarray, u: np.ndarray, use_scaled: bool = False) -> float | np.ndarray:
+        """Compute the cost for a given output vector y. Supports vectorized inputs."""
+        # Note: x @ Vx.T handles both (nx,) and (N, nx) inputs correctly via broadcasting/matrix-mul rules
+        y = x @ self.Vx.T + u @ self.Vu.T
         e = y - self.yref
         
         scale = 0.5
         if use_scaled:
             scale *= self.stage_scale
-        return scale * float(e.T @ self.W @ e)
+        
+        norm = weighted_quadratic_norm(e, self.W)
+        if np.ndim(norm) == 0:
+            return scale * float(norm)
+        return scale * norm
     
-    def get_terminal_cost(self, x: np.ndarray, use_scaled: bool = False) -> float:
-        """Compute the terminal cost for a given output vector y."""
+    def get_terminal_cost(self, x: np.ndarray, use_scaled: bool = False) -> float | np.ndarray:
+        """Compute the terminal cost for a given output vector y. Supports vectorized inputs."""
         if not self.has_terminal_cost():
             return 0.0
-        y = self.Vx_e @ x
+        y = x @ self.Vx_e.T
         e = y - self.yref_e
         
         scale = 0.5
         if use_scaled:
             scale *= self.terminal_scale
-        return scale * float(e.T @ self.W_e @ e)
+
+        norm = weighted_quadratic_norm(e, self.W_e)
+        if np.ndim(norm) == 0:
+            return scale * float(norm)
+        return scale * norm
 
     def has_terminal_cost(self) -> bool:
         """Check if terminal cost matrices are defined."""
@@ -187,7 +197,7 @@ class LinearLSCost:
             terminal_scale=cost_grp.attrs.get("terminal_scale", 1.0),
         )
 
-    def to_hdf5(self, grp: h5py.Group, exclude_fields: Optional[set] = None) -> None:
+    def to_hdf5(self, grp: h5py.Group, exclude_fields: set | None = None) -> None:
         """Save cost matrices to a trajectory group (creates a `cost` subgroup)."""
         exclude_fields = exclude_fields or set()
         field_names = list(self.__dataclass_fields__.keys())
@@ -295,7 +305,7 @@ class Constraints:
             ubx_e=cons_grp["ubx_e"][:] if "ubx_e" in cons_grp else np.array([]),
         )
 
-    def to_hdf5(self, grp: h5py.Group, exclude_fields: Optional[set] = None) -> None:
+    def to_hdf5(self, grp: h5py.Group, exclude_fields: set | None = None) -> None:
         """Save constraints to a trajectory group (creates a `constraints` subgroup)."""
         exclude_fields = exclude_fields or set()
         field_names = list(self.__dataclass_fields__.keys())
@@ -440,10 +450,10 @@ class MPCConfig:
     def to_hdf5(
         self,
         grp: h5py.Group,
-        exclude_attrs: Optional[set] = None,
-        exclude_constraints: Optional[set] = None,
-        exclude_model: Optional[set] = None,
-        exclude_cost: Optional[set] = None,
+        exclude_attrs: set | None = None,
+        exclude_constraints: set | None = None,
+        exclude_model: set | None = None,
+        exclude_cost: set | None = None,
         group_name: str = "config",
     ) -> None:
         """Save config to a trajectory group (creates a `config` subgroup)."""
@@ -518,10 +528,10 @@ class MPCTrajectory:
     inputs: np.ndarray
     times: np.ndarray
     V_solver: np.ndarray
-    V_N: Optional[np.ndarray] = None
-    V_horizon: Optional[np.ndarray] = None
-    predicted_states: Optional[np.ndarray] = None
-    predicted_inputs: Optional[np.ndarray] = None
+    V_N: np.ndarray | None = None
+    V_horizon: np.ndarray | None = None
+    predicted_states: np.ndarray | None = None
+    predicted_inputs: np.ndarray | None = None
     feasible: bool = True
     
     @property
@@ -530,7 +540,7 @@ class MPCTrajectory:
         return self.states.shape[0] - 1
     
     @property
-    def horizon(self) -> Optional[int]:
+    def horizon(self) -> int | None:
         """Get the prediction horizon length (if available)."""
         if self.predicted_states is not None:
             return self.predicted_states.shape[1] - 1
@@ -788,7 +798,7 @@ class MPCDataset:
     - Holds a file handle (_h5_file) instead of a list of data.
     - Reads arrays from disk only when __getitem__ is called.
     """
-    def __init__(self, file_path: Optional[str] = None, data_buffer: List[MPCData] = None):
+    def __init__(self, file_path: str | None = None, data_buffer: list[MPCData] = None):
         self.file_path = Path(file_path) if file_path else None
         self.memory_buffer = data_buffer if data_buffer else []
         
@@ -832,7 +842,7 @@ class MPCDataset:
             key=lambda x: int(x.split('_')[1])
         )
 
-    def _handle_global_config(self, f: h5py.File) -> Dict[str, Set[str]]:
+    def _handle_global_config(self, f: h5py.File) -> dict[str, set[str]]:
         if "global_config" in f:
             return self._read_existing_global_config(f["global_config"])
 
@@ -844,7 +854,7 @@ class MPCDataset:
 
         return {k: set() for k in ["attrs", "constraints", "model", "cost"]}
 
-    def _save_entry(self, grp: h5py.Group, entry: MPCData, exclusions: Dict[str, Set[str]], save_ocp: bool) -> None:
+    def _save_entry(self, grp: h5py.Group, entry: MPCData, exclusions: dict[str, set[str]], save_ocp: bool) -> None:
         entry.config.to_hdf5(
             grp,
             exclude_attrs=exclusions["attrs"],
@@ -857,7 +867,7 @@ class MPCDataset:
         entry.meta.to_hdf5(grp)
         grp.attrs["feasible"] = entry.trajectory.feasible
 
-    def _get_field_map(self) -> Dict[str, List[str]]:
+    def _get_field_map(self) -> dict[str, list[str]]:
         """Returns a mapping of config category to list of field names."""
         return {
             "attrs": sorted(set(MPCConfig.__dataclass_fields__.keys()) - {"constraints", "model", "cost"}),
@@ -866,7 +876,7 @@ class MPCDataset:
             "cost": sorted(LinearLSCost.__dataclass_fields__.keys()),
         }
 
-    def _find_common_config_fields(self) -> Dict[str, Set[str]]:
+    def _find_common_config_fields(self) -> dict[str, set[str]]:
         """Identifies fields that are constant across the memory buffer."""
         if not self.memory_buffer: return {}
         
@@ -890,7 +900,7 @@ class MPCDataset:
         if category == "cost": return getattr(cfg.cost, name)
         return None
 
-    def _read_existing_global_config(self, grp: h5py.Group) -> Dict[str, Set[str]]:
+    def _read_existing_global_config(self, grp: h5py.Group) -> dict[str, set[str]]:
         field_map = self._get_field_map()
         exclusions = {}
         
@@ -907,7 +917,7 @@ class MPCDataset:
         
         return exclusions
 
-    def _write_global_config(self, f: h5py.File, cfg: MPCConfig, fields: Dict[str, Set[str]]) -> None:
+    def _write_global_config(self, f: h5py.File, cfg: MPCConfig, fields: dict[str, set[str]]) -> None:
         field_map = self._get_field_map()
         exclusions = {k: set(field_map[k]) - fields[k] for k in field_map}
 
@@ -1037,9 +1047,9 @@ class MPCDataset:
     
     def validate(
         self,
-        x_bounds: Optional[np.ndarray] = None,
-        u_bounds: Optional[np.ndarray] = None,
-        x_ref: Optional[np.ndarray] = None,
+        x_bounds: np.ndarray | None = None,
+        u_bounds: np.ndarray | None = None,
+        x_ref: np.ndarray | None = None,
         tol_constraints: float = 1e-4,
         tol_stability: float = 1e-2
     ) -> pd.DataFrame:

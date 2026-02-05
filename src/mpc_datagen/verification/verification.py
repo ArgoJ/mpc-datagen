@@ -1,6 +1,6 @@
 import numpy as np
 
-from typing import Generator, Optional, List
+from collections.abc import Generator
 from acados_template import AcadosOcpSolver
 
 from .reports import *
@@ -19,7 +19,7 @@ class StabilityVerifier:
     based on the optimal value function V_N as a Lyapunov function.
     """
 
-    def __init__(self, dataset: MPCDataset, solver: Optional[AcadosOcpSolver] = None):
+    def __init__(self, dataset: MPCDataset, solver: AcadosOcpSolver | None = None):
         """Create a linear stability verifier over an entire dataset.
 
         Parameters
@@ -33,12 +33,12 @@ class StabilityVerifier:
         self.eps = 1e-6
 
         # Bindable entry 
-        self._active_entry: Optional[MPCData] = None
-        self.traj : Optional[MPCTrajectory] = None
-        self.meta : Optional[MPCMeta] = None
+        self._active_entry: MPCData | None = None
+        self.traj : MPCTrajectory | None = None
+        self.meta : MPCMeta | None = None
         
-        self.cfg: Optional[MPCConfig] = None
-        self.sys: Optional[LinearSystem] = None
+        self.cfg: MPCConfig | None = None
+        self.sys: LinearSystem | None = None
         if isinstance(solver, AcadosOcpSolver):
             self.cfg = MPCConfigExtractor.get_cfg(solver)
             self.cfg.T_sim = dataset[0].config.T_sim
@@ -173,7 +173,7 @@ class StabilityVerifier:
             
         Yields
         -------
-        Generator[MPCData, None, None]
+        entry : MPCData
             The next entry in the dataset.
         """
         for entry in self:
@@ -185,45 +185,81 @@ class StabilityVerifier:
 
     def get_feasible_dataset(self) -> MPCDataset:
         """Extract a feasible-only subset of the dataset."""
-        feasible_entries: List[MPCData] = []
+        feasible_entries: list[MPCData] = []
         for entry in self.dataset:
             if entry.is_feasible():
                 feasible_entries.append(entry)
         return MPCDataset(data_buffer=feasible_entries)
 
 
-    # --- LYAPUNOV STABILITY CHECKS ---
-    def lyapunov_decrease(self) -> List[float]:
+    # --- LYAPUNOV DESCENT CHECK ---
+    def lyapunov_descent(self) -> np.ndarray:
         """Calculate $V_N(x_{k+1}) - V_N(x_k)$ for the current trajectory.
 
         Returns
         -------
-        List[float]
+        diffs : np.ndarray
             The sequence of Lyapunov differences V_N(x_{k+1}) - V_N(x_k).
             Values <= 0 satisfy the decrease condition.
         """
-        diffs: List[float] = []
+        limit = min(self.cfg.T_sim, len(self.traj.V_N))
+        if limit < 2:
+            return np.array([])
 
-        for n in range(self.cfg.T_sim - 1):
-            V_curr = self._V(n)
-            V_next = self._V(n + 1)
+        V = np.asarray(self.traj.V_N[:limit], dtype=float)
+        diffs = V[1:] - V[:-1]
+        valid_mask = np.isfinite(V[:-1]) & np.isfinite(V[1:])
 
-            if not (np.isfinite(V_curr) and np.isfinite(V_next)):
-                __logger__.debug(f"Skipping step {n} due to non-finite value function V_N(x): V_curr={V_curr:.4e}, V_next={V_next:.4e}")
-                continue
+        return diffs[valid_mask]
 
-            diffs.append(float(V_next - V_curr))
-
-        return diffs
-
-    def alpha_and_max_violation(self, alpha_required: float = 1e-3) -> AlphaViolationStats:
+    def check_lyapunov_descent(self) -> LyapunovDescentReport:
         """
-        This implementation estimates the *observed* alpha and maximum violation at each step as
+        Check for global non-increase (monotonicity) of the Lyapunov function V_N(x).
         
-        $$\alpha_{\text{obs}}(n) = min((V_N(x_k) - V_N(x_{k+1})) / \ell(x_k,u_k))$$  
-        $$viol(n)      = max(0, V_N(x_{k+1}) - V_N(x_k) + \alpha_{\text{req}}*\ell(x_k,u_k))$$  
+        Verifies $V_N(x_{k+1}) - V_N(x_k) \le 0$ for all trajectory steps, 
+        ensuring stability even in regions with small stage cost (near equilibrium).
+
+        Returns
+        -------
+        report : LyapunovDescentReport
+            Report summarizing the descent check results.
+        """
+        max_increase = 0.0
+        violation_count = 0
+        total_steps = 0
         
-        where \ell(x_k,u_k) is the stage cost at step n.
+        for _ in self.iter_binded_entries():
+            diffs = self.lyapunov_descent()
+            total_steps += len(diffs)
+            
+            # V_next - V_curr <= 0 (allowing for tolerance)
+            # Violation if: V_next - V_curr > self.eps
+            violation_mask = diffs > self.eps
+            n_violations = np.sum(violation_mask)
+            
+            if n_violations > 0:
+                violation_count += n_violations
+                max_increase = max(max_increase, float(np.max(diffs[violation_mask])))
+        
+        is_stable = (violation_count == 0)
+        msg = (f"{'Passed' if is_stable else 'Failed'}: "
+               f"{violation_count}/{total_steps} violations, "
+               f"max_increase={max_increase:.4e}")
+
+        return LyapunovDescentReport(
+            is_stable=is_stable,
+            message=msg,
+            max_increase=max_increase,
+            violation_count=int(violation_count),
+            total_steps=total_steps
+        )
+
+
+    # --- ALPHA-DECAY CHECK ---
+    def alpha_and_max_violation(self, alpha_required: float = 1e-3) -> AlphaViolationStats:
+        r"""
+        Estimates the *observed* alpha and maximum violation for steps with significant stage cost.
+        Verifies $V_N(x_{k+1}) - V_N(x_k) \le -\alpha \ell(x_k, u_k)$.
 
         Parameters
         ----------
@@ -235,61 +271,58 @@ class StabilityVerifier:
         stats : AlphaViolationStats
             The observed minimum alpha and maximum violation statistics.
         """
-        min_alpha: float = float("inf")
-        max_violation = 0.0
-        min_residual = float("inf")
-        n_used = 0
-
-        T_sim = min(self.cfg.T_sim, len(self.traj.states), len(self.traj.V_N))
-        for n in range(T_sim - 1):
-            V_curr = self._V(n)
-            V_next = self._V(n + 1)
-            if not (np.isfinite(V_curr) and np.isfinite(V_next)):
-                __logger__.debug(f"Skipping step {n} due to non-finite value function V_N(x): V_curr={V_curr:.4e}, V_next={V_next:.4e}")
-                continue
-
-            l_curr = self.cfg.cost.get_stage_cost(self.traj.states[n], self.traj.inputs[n])
-
-            if not np.isfinite(l_curr) or l_curr <= self.eps:
-                # Still want to detect viaolations in decrease condition.
-                __logger__.debug(f"Skipping step {n} due to non-finite or too small stage cost l_curr={l_curr:.4e}")
-                eps = 1e-10 + 1e-8 * max(1.0, abs(V_curr))
-                residual = float(V_next - V_curr)
-                violation = max(0.0, residual - eps)
-                max_violation = max(max_violation, violation)
-                min_residual = min(min_residual, residual)
-                n_used += 1
-                continue
-
-            alpha_obs = (V_curr - V_next) / l_curr
-            if not np.isfinite(alpha_obs):
-                __logger__.debug(f"Skipping step {n} due to non-finite observed alpha_obs={alpha_obs:.4e}")
-                continue
-
-            min_alpha = min(min_alpha, float(alpha_obs))
-            rhs = V_curr - float(alpha_required) * l_curr
-            residual = float(V_next - rhs)               # <0 means satisfied with margin
-            violation = max(0.0, residual)               # >=0 by definition
-            max_violation = max(max_violation, violation)
-            min_residual = min(min_residual, residual)
-
-            n_used += 1
-
-        if n_used == 0:
+        T_limit = min(self.cfg.T_sim, len(self.traj.inputs), len(self.traj.states) - 1, len(self.traj.V_N) - 1)
+        if T_limit < 1:
             return AlphaViolationStats()
 
-        if min_alpha == float("inf"):
+        states = np.asarray(self.traj.states[:T_limit], dtype=float)
+        inputs = np.asarray(self.traj.inputs[:T_limit], dtype=float)
+        
+        # Value function sequence: V_k, V_{k+1}
+        V = np.asarray(self.traj.V_N, dtype=float)
+        V_curr = V[:T_limit]
+        V_next = V[1:T_limit+1]
+
+        l_curr = self.cfg.cost.get_stage_cost(states, inputs)
+
+        # --- Verification Logic ---
+        v_finite_mask = np.isfinite(V_curr) & np.isfinite(V_next)            
+        mask = v_finite_mask & (np.isfinite(l_curr) & (l_curr > self.eps))
+        if not np.any(mask):
+            return AlphaViolationStats()
+
+        vc = V_curr[mask]
+        vn = V_next[mask]
+        lc = l_curr[mask]
+        
+        alpha_obs = (vc - vn) / lc
+        
+        # Filter non-finite alpha
+        valid_alpha_mask = np.isfinite(alpha_obs)
+        if np.any(valid_alpha_mask):
+            min_alpha = float(np.min(alpha_obs[valid_alpha_mask]))
+        else:
             min_alpha = float("nan")
+
+        # V_next <= V_curr - alpha_req * l_curr
+        rhs = vc - alpha_required * lc
+        residual = vn - rhs
+        violation = np.maximum(0.0, residual)
+        
+        max_violation = float(np.max(violation))
+        min_residual = float(np.min(residual))
 
         return AlphaViolationStats(
             min_alpha=float(min_alpha), 
             max_violation=float(max_violation), 
             min_residual=float(min_residual), 
-            n_used=int(n_used))
+            n_used=int(np.sum(mask)))
 
-    def strict_asymptotic_stability(self, alpha_required: float = 1e-6) -> AsymptoticStabilityReport:
-        """Empiricaly strict asymptotic stability verification for the dataset.
-        Using the minimum observed alpha and maximum violation over all feasible trajectories.
+
+    def asymptotic_stability(self, alpha_required: float = 1e-3) -> AsymptoticStabilityReport:
+        """
+        Checks for potential decrease (alpha-decay) where stage cost is significant.
+        Using the minimum observed alpha and maximum violation over steps with l(x,u) > eps.
 
         Parameters
         ----------
@@ -305,7 +338,7 @@ class StabilityVerifier:
         violations = []
         used = 0
 
-        for _ in self.iter_binded_entries():
+        for _ in self.iter_binded_entries(require_feasibility=True):
             stats = self.alpha_and_max_violation(alpha_required=alpha_required)
             if stats.n_used == 0:
                 continue
@@ -338,9 +371,9 @@ class StabilityVerifier:
 
 
     # --- GRÜNE CONDITION CHECK ---
-    def gamma_estimates(self) -> List[float]:
+    def gamma_estimates(self) -> list[float]:
         """Estimate the maximum gamma value over the dataset."""
-        gamma_values: List[float] = []
+        gamma_values: list[float] = []
 
         T_sim = min(self.cfg.T_sim, len(self.traj.states), len(self.traj.V_N))
         for n in range(T_sim):
@@ -364,13 +397,8 @@ class StabilityVerifier:
             gamma_values.append(float(Vn / lstar))
         return gamma_values
 
-    def grüne_horizon_condition(self, min_cost_threshold: float = 1e-6) -> GrüneHorizonReport:
+    def grüne_horizon_condition(self) -> GrüneHorizonReport:
         """Dataset-level Grüne horizon condition certification.
-
-        Parameters
-        ----------
-        min_cost_threshold : float
-            Minimum stage cost l*(x0) to consider a data point valid for gamma estimation.
 
         Returns
         -------
@@ -387,11 +415,11 @@ class StabilityVerifier:
                 message="Not applicable: Dataset includes terminal cost/bounds; no-terminal theorem does not directly apply")
 
         N = int(cfg0.N)
-        gamma_values: List[float] = []
+        gamma_values: list[float] = []
         
         for _ in self.iter_binded_entries():
             gamma_values.extend(
-                self.gamma_estimates(min_cost_threshold=min_cost_threshold))
+                self.gamma_estimates())
                 
 
         if not gamma_values:
@@ -417,9 +445,8 @@ class StabilityVerifier:
     def verify(
         cls,
         dataset: MPCDataset,
-        solver: Optional[AcadosOcpSolver] = None,
+        solver: AcadosOcpSolver | None = None,
         alpha_required: float = 1e-4,
-        min_cost_threshold: float = 1e-3,
     ) -> StabilityReport:
         """Dataset-level verification using the optimal value function as a Lyapunov candidate.
         
@@ -431,8 +458,6 @@ class StabilityVerifier:
             The Acados OCP solver instance used for linear stability verification.
         alpha_required : float
             Minimum empirical alpha required for verification.
-        min_cost_threshold : float
-            Minimum stage cost l*(x0) to consider a data point valid for gamma estimation.
 
         Returns
         -------
@@ -440,15 +465,24 @@ class StabilityVerifier:
             Stability report indicating whether the dataset passes empirical checks.
         """
         verifier = StabilityVerifier(dataset, solver)
-        lyap_report = verifier.strict_asymptotic_stability(alpha_required=alpha_required, min_cost_threshold=min_cost_threshold)
-        grune_report = verifier.grüne_horizon_condition(min_cost_threshold=min_cost_threshold)
 
+        # 1. Global Descent Check (Monotonicity)
+        descent_report = verifier.check_lyapunov_descent()
+        
+        # 2. Asymptotic Stability (Alpha-Decay)
+        asym_stab_report = verifier.asymptotic_stability(alpha_required=alpha_required)
+        
+        # 3. Grüne Condition
+        grune_report = verifier.grüne_horizon_condition()
         gruene_pass = bool(grune_report.applicability and grune_report.is_stable)
-        lyap_pass = bool(lyap_report.is_stable)
 
-        if lyap_pass:
+        if asym_stab_report.is_stable and descent_report.is_stable:
             msg = (
-                f"PASS. Lyapunov decrease observed with min_alpha={lyap_report.min_alpha:.3e} "
+                f"PASS. Lyapunov descent observed with min_alpha={asym_stab_report.min_alpha:.3e}, "
+                f"alpha_required={alpha_required:.3e}, and no descent violations.")
+        elif not asym_stab_report.is_stable and descent_report.is_stable:
+            msg = (
+                f"PASS. Asymptotic stability estimated with alpha={asym_stab_report.min_alpha:.3e} "
                 f"and alpha_required={alpha_required:.3e}.")
         elif gruene_pass:
             msg = (
@@ -456,13 +490,16 @@ class StabilityVerifier:
                 f"and required_horizon={grune_report.required_horizon}.")
         else:
             msg = (
-                f"FAIL. lyapunov='{lyap_report.message}', grune='{grune_report.message}'.")
+                f"FAIL. lyapunov='{asym_stab_report.message}', "
+                f"descent='{descent_report.message}', "
+                f"grune='{grune_report.message}'.")
 
         return StabilityReport(
             method="Empirical Verification",
-            is_stable=bool(gruene_pass or lyap_pass),
+            is_stable=bool(gruene_pass or (asym_stab_report.is_stable and descent_report.is_stable)),
             details={
-                "lyapunov_decrease_report": lyap_report,
+                "lyapunov_alpha_report": asym_stab_report,
+                "lyapunov_descent_report": descent_report,
                 "grune_report": grune_report,
             },
             message=msg,
