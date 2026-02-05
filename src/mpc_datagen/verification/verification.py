@@ -118,50 +118,6 @@ class StabilityVerifier:
             )
 
 
-    # --- COST CALCULATIONS ---
-    def _V(self, step_index: int) -> float:
-        """Get V_N(x_step) using the selected value-function source."""
-        self._require_bound_entry()
-        if step_index < 0 or step_index >= len(self.traj.V_N):
-            raise IndexError(f"Step index {step_index} out of range for trajectory costs.")
-        return float(self.traj.V_N[step_index])
-
-    def _l_star(self, x: np.ndarray) -> float:
-        """Lower bound on l*(x) := min_u l(x,u) via unconstrained minimization.
-
-        This ignores input constraints, yielding a conservative (small) lower bound on l*(x)
-        for constrained problems. In Grüne's gamma estimate, this makes V/l* larger (safer).
-        """
-        x = np.asarray(x, dtype=float).reshape(-1)
-
-        a = (self.cfg.cost.Vx @ x - self.cfg.cost.yref).reshape(-1)  # y = a + Vu u
-        H = self.cfg.cost.Vu.T @ self.cfg.cost.W @ self.cfg.cost.Vu
-        H = 0.5 * (H + H.T)
-        g = (self.cfg.cost.Vu.T @ self.cfg.cost.W @ a).reshape(-1)
-
-        if H.size == 0:
-            return float(a.T @ self.cfg.cost.W @ a)
-
-        try:
-            u_star = -np.linalg.solve(H, g)
-        except np.linalg.LinAlgError:
-            u_star = -np.linalg.lstsq(H, g, rcond=None)[0]
-
-        if not self.cfg.constraints.is_inside_bu(u_star):
-            __logger__.error(
-                "Unconstrained optimal control input u* is outside input bounds; "
-                "l*(x) lower bound may be conservative."
-            )
-            return 0.0
-        if not self.cfg.constraints.is_inside_bx(x):
-            __logger__.error(
-                "State x is outside state bounds; l*(x) lower bound may be invalid."
-            )
-            return 0.0
-
-        return float(self.cfg.cost.get_stage_cost(x, u_star))
-
-
     # --- DATASET ITERATORS ---
     def iter_binded_entries(self, require_feasibility: bool = True) -> Generator[MPCData, None, None]:
         """Iterator over dataset entries with optional filtering/binding.
@@ -172,7 +128,7 @@ class StabilityVerifier:
             Whether to only yield feasible entries.
             
         Yields
-        -------
+        ------
         entry : MPCData
             The next entry in the dataset.
         """
@@ -183,13 +139,96 @@ class StabilityVerifier:
             self._bind_entry(entry)
             yield entry
 
-    def get_feasible_dataset(self) -> MPCDataset:
-        """Extract a feasible-only subset of the dataset."""
-        feasible_entries: list[MPCData] = []
-        for entry in self.dataset:
-            if entry.is_feasible():
-                feasible_entries.append(entry)
-        return MPCDataset(data_buffer=feasible_entries)
+
+    # --- L* OPTIMIZATION ---
+    def l_star(self, x: np.ndarray) -> float | np.ndarray:
+        r"""Lower bound on $\ell^*(x) := \min_\mathbf{u} \ell(x,\mathbf{u})$ via unconstrained minimization.
+        This includes bound checks to ensure validity of the lower bound.
+        
+        Supports vectorized inputs for x with shape (N, nx).
+        Returns shape (N,) or scalar float.
+        """
+        x = np.asarray(x, dtype=float)
+        scalar_input = (x.ndim == 1)
+        if scalar_input:
+            x = x.reshape(1, -1)
+            
+        # x is (N, nx)
+        # Cost: 0.5 * || Vx*x + Vu*u - yref ||_W^2
+        # Gradient w.r.t u: Vu.T @ W @ (Vx*x + Vu*u - yref)
+        # set to 0 => Vu.T @ W @ Vu @ u = - Vu.T @ W @ (Vx*x - yref)
+        # H u = - g
+        
+        Vx = self.cfg.cost.Vx
+        Vu = self.cfg.cost.Vu
+        W = self.cfg.cost.W
+        yref = self.cfg.cost.yref
+        
+        # H: (nu, nu)
+        H = Vu.T @ W @ Vu
+        H = 0.5 * (H + H.T)
+
+        # Vx*x - yref: (N, ny)
+        term1 = x @ Vx.T - yref
+        
+        # g (rhs for each sample): term1 @ W @ Vu -> (N, nu)
+        G = term1 @ W @ Vu
+        
+        # H @ u_star.T = -G.T  => u_star.T = -H^-1 @ G.T
+        if H.size == 0 or H.shape[0] == 0:
+            # No control inputs, u is empty.
+            u_star = np.zeros((x.shape[0], 0))
+        else:
+            try:
+                # Solve H X = -G.T  where X is u_star.T (nu, N)
+                # result is (nu, N)
+                u_star_T = -np.linalg.solve(H, G.T)
+                u_star = u_star_T.T
+            except np.linalg.LinAlgError:
+                # Fallback for singular H
+                u_star_T = -np.linalg.lstsq(H, G.T, rcond=None)[0]
+                u_star = u_star_T.T
+        
+        # Calculate costs: (N,)
+        costs = self.cfg.cost.get_stage_cost(x, u_star)
+        
+        # Input bounds
+        valid_u = np.full(x.shape[0], True)
+        if self.cfg.constraints.has_bu():
+            # lbu, ubu are (nu,)
+            # u_star is (N, nu)
+            valid_u = np.all(
+                (u_star >= self.cfg.constraints.lbu) & (u_star <= self.cfg.constraints.ubu), 
+                axis=1
+            )
+            
+        # State bounds
+        valid_x = np.full(x.shape[0], True)
+        if self.cfg.constraints.has_bx():
+            valid_x = np.all(
+                (x >= self.cfg.constraints.lbx) & (x <= self.cfg.constraints.ubx),
+                axis=1
+            )
+            
+        invalid_mask = (~valid_u) | (~valid_x)
+        if np.any(invalid_mask):
+            if scalar_input:
+                if not valid_u[0]:
+                    __logger__.error("Unconstrained optimal control input u* is outside input bounds; l*(x) lower bound may be conservative.")
+                if not valid_x[0]:
+                    __logger__.error("State x is outside state bounds; l*(x) lower bound may be invalid.")
+            else:
+                if not np.all(valid_u):
+                    __logger__.error("Unconstrained optimal control input u* is outside input bounds for some inputs; l*(x) lower bound may be conservative.")
+                if not np.all(valid_x):
+                    __logger__.error("State x is outside state bounds for some inputs; l*(x) lower bound may be invalid.")
+            
+            costs[invalid_mask] = 0.0
+
+        if scalar_input:
+            return float(costs[0])
+            
+        return costs
 
 
     # --- LYAPUNOV DESCENT CHECK ---
@@ -319,7 +358,7 @@ class StabilityVerifier:
             n_used=int(np.sum(mask)))
 
 
-    def asymptotic_stability(self, alpha_required: float = 1e-3) -> AsymptoticStabilityReport:
+    def asymptotic_stability(self, alpha_required: float = 1e-4) -> AsymptoticStabilityReport:
         """
         Checks for potential decrease (alpha-decay) where stage cost is significant.
         Using the minimum observed alpha and maximum violation over steps with l(x,u) > eps.
@@ -373,29 +412,34 @@ class StabilityVerifier:
     # --- GRÜNE CONDITION CHECK ---
     def gamma_estimates(self) -> list[float]:
         """Estimate the maximum gamma value over the dataset."""
-        gamma_values: list[float] = []
+        T_limit = min(self.cfg.T_sim, len(self.traj.states), len(self.traj.V_N))
+        
+        states = np.asarray(self.traj.states[:T_limit], dtype=float)
+        V_N = np.asarray(self.traj.V_N[:T_limit], dtype=float)
+        
+        # Finite check
+        valid_x = np.all(np.isfinite(states), axis=1)
+        valid_V = np.isfinite(V_N)
+        mask = valid_x & valid_V
+        if not np.any(mask):
+            return []
 
-        T_sim = min(self.cfg.T_sim, len(self.traj.states), len(self.traj.V_N))
-        for n in range(T_sim):
-            x = np.asarray(self.traj.states[n], dtype=float)
-            if not np.all(np.isfinite(x)):
-                __logger__.debug(f"Skipping step {n} due to non-finite state x={x}")
-                continue
+        indices = np.where(mask)[0]
+        subset_states = states[indices]
+        subset_V = V_N[indices]
+        
+        l_stars = self.l_star(subset_states)
 
-            Vn = float(self._V(n))
-            if not np.isfinite(Vn):
-                __logger__.debug(f"Skipping step {n} due to non-finite cost Vn={Vn:.4e}")
-                continue
+        valid_l = np.isfinite(l_stars) & (l_stars > self.eps)        
+        if not np.any(valid_l):
+            return []
 
-            # l*(x) := min_u l(x,u)
-            lstar = float(self._l_star(x))
-
-            if (not np.isfinite(lstar)) or (lstar <= self.eps):
-                __logger__.debug(f"Skipping step {n} due to small stage cost l(x,u)={lstar:.4e} <= tol={self.eps:.4e}")
-                continue
-
-            gamma_values.append(float(Vn / lstar))
-        return gamma_values
+        final_V = subset_V[valid_l]
+        final_l = l_stars[valid_l]
+        
+        gamma_array = final_V / final_l
+        
+        return gamma_array.tolist()
 
     def grüne_horizon_condition(self) -> GrüneHorizonReport:
         """Dataset-level Grüne horizon condition certification.
@@ -418,8 +462,7 @@ class StabilityVerifier:
         gamma_values: list[float] = []
         
         for _ in self.iter_binded_entries():
-            gamma_values.extend(
-                self.gamma_estimates())
+            gamma_values.extend(self.gamma_estimates())
                 
 
         if not gamma_values:
