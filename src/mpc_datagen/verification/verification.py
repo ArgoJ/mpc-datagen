@@ -242,7 +242,7 @@ class StabilityVerifier:
                 max_increase = max(max_increase, float(np.max(diffs[violation_mask])))
         
         is_stable = (violation_count == 0)
-        msg = (f"{'Passed' if is_stable else 'Failed'}: "
+        msg = (f"{'PASS' if is_stable else 'FAIL'}: "
                f"{violation_count}/{total_steps} violations, "
                f"max_increase={max_increase:.4e}")
 
@@ -360,7 +360,7 @@ class StabilityVerifier:
         return AsymptoticStabilityReport(
             is_stable=empirical_ok,
             message=(
-                f"{'Satisfied' if empirical_ok else 'Not satisfied'}: "
+                f"{'PASS' if empirical_ok else 'FAIL'}: "
                 f"min_alpha={min_alpha:.4e}, "
                 f"max_violation={max_violation:.4e}, "
                 f"alpha_required={alpha_required:.4e}."
