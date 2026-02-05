@@ -30,6 +30,7 @@ class StabilityVerifier:
             The Acados OCP solver instance used for linear stability verification.
         """
         self.dataset = dataset
+        self.eps = 1e-6
 
         # Bindable entry 
         self._active_entry: Optional[MPCData] = None
@@ -203,8 +204,31 @@ class StabilityVerifier:
         return MPCDataset(data_buffer=feasible_entries)
 
 
-    # --- LYAPUNOV STABILITY CHECK ---
-    def alpha_and_max_violation(self, alpha_required: float = 1e-3, min_cost_threshold: float = 1e-5) -> AlphaViolationStats:
+    # --- LYAPUNOV STABILITY CHECKS ---
+    def lyapunov_decrease(self) -> List[float]:
+        """Calculate $V_N(x_{k+1}) - V_N(x_k)$ for the current trajectory.
+
+        Returns
+        -------
+        List[float]
+            The sequence of Lyapunov differences V_N(x_{k+1}) - V_N(x_k).
+            Values <= 0 satisfy the decrease condition.
+        """
+        diffs: List[float] = []
+
+        for n in range(self.cfg.T_sim - 1):
+            V_curr = self._V(n)
+            V_next = self._V(n + 1)
+
+            if not (np.isfinite(V_curr) and np.isfinite(V_next)):
+                __logger__.debug(f"Skipping step {n} due to non-finite value function V_N(x): V_curr={V_curr:.4e}, V_next={V_next:.4e}")
+                continue
+
+            diffs.append(float(V_next - V_curr))
+
+        return diffs
+
+    def alpha_and_max_violation(self, alpha_required: float = 1e-3) -> AlphaViolationStats:
         """
         This implementation estimates the *observed* alpha and maximum violation at each step as
         
@@ -217,12 +241,10 @@ class StabilityVerifier:
         ----------
         alpha_required : float
             Minimum empirical threshold required for verification.
-        min_cost_threshold : float
-            Minimum stage cost to consider for verification.
 
         Returns
         -------
-        AlphaViolationStats
+        stats : AlphaViolationStats
             The observed minimum alpha and maximum violation statistics.
         """
         if not self.valid:
@@ -241,12 +263,11 @@ class StabilityVerifier:
                 __logger__.debug(f"Skipping step {n} due to non-finite value function V_N(x): V_curr={V_curr:.4e}, V_next={V_next:.4e}")
                 continue
 
-            # Stage-cost scaling must match the value-function scaling used in V_N.
             l_curr = self.cfg.cost.get_stage_cost(self.traj.states[n], self.traj.inputs[n])
 
-            if not np.isfinite(l_curr) or l_curr <= min_cost_threshold:
-                # Near-equilibrium regime: alpha_obs is ill-conditioned, but we still want to
-                # detect increases in V_N.
+            if not np.isfinite(l_curr) or l_curr <= self.eps:
+                # Still want to detect viaolations in decrease condition.
+                __logger__.debug(f"Skipping step {n} due to non-finite or too small stage cost l_curr={l_curr:.4e}")
                 eps = 1e-10 + 1e-8 * max(1.0, abs(V_curr))
                 residual = float(V_next - V_curr)
                 violation = max(0.0, residual - eps)
@@ -281,20 +302,18 @@ class StabilityVerifier:
             min_residual=float(min_residual), 
             n_used=int(n_used))
 
-    def lyapunov_decrease(self, alpha_required: float = 1e-3, min_cost_threshold: float = 1e-6) -> LyapunovDecreaseReport:
-        """Dataset-level empirical Lyapunov decrease verification.
+    def strict_asymptotic_stability(self, alpha_required: float = 1e-6) -> AsymptoticStabilityReport:
+        """Empiricaly strict asymptotic stability verification for the dataset.
         Using the minimum observed alpha and maximum violation over all feasible trajectories.
 
         Parameters
         ----------
         alpha_required : float
             Minimum empirical threshold required for verification.
-        min_cost_threshold : float
-            Minimum stage cost to consider for verification.
 
         Returns
         -------
-        LyapunovDecreaseReport
+        report : AsymptoticStabilityReport
             A report indicating the empirical alpha and whether the decrease condition is satisfied.
         """
         alphas = []
@@ -302,7 +321,7 @@ class StabilityVerifier:
         used = 0
 
         for _ in self.iter_binded_entries():
-            stats = self.alpha_and_max_violation(alpha_required=alpha_required, min_cost_threshold=min_cost_threshold)
+            stats = self.alpha_and_max_violation(alpha_required=alpha_required)
             if stats.n_used == 0:
                 continue
             if np.isfinite(stats.min_alpha):
@@ -320,7 +339,7 @@ class StabilityVerifier:
 
         empirical_ok = bool((min_alpha >= alpha_required) and (max_violation <= 0.0))
 
-        return LyapunovDecreaseReport(
+        return AsymptoticStabilityReport(
             is_stable=empirical_ok,
             message=(
                 f"{'Satisfied' if empirical_ok else 'Not satisfied'}: "
@@ -334,7 +353,7 @@ class StabilityVerifier:
 
 
     # --- GRÜNE CONDITION CHECK ---
-    def gamma_estimates(self, min_cost_threshold: float = 1e-6) -> List[float]:
+    def gamma_estimates(self) -> List[float]:
         """Estimate the maximum gamma value over the dataset."""
         gamma_values: List[float] = []
 
@@ -353,8 +372,8 @@ class StabilityVerifier:
             # l*(x) := min_u l(x,u)
             lstar = float(self._l_star(x))
 
-            if (not np.isfinite(lstar)) or (lstar <= min_cost_threshold):
-                __logger__.debug(f"Skipping step {n} due to small stage cost l(x,u)={lstar:.4e} <= tol={min_cost_threshold:.4e}")
+            if (not np.isfinite(lstar)) or (lstar <= self.eps):
+                __logger__.debug(f"Skipping step {n} due to small stage cost l(x,u)={lstar:.4e} <= tol={self.eps:.4e}")
                 continue
 
             gamma_values.append(float(Vn / lstar))
@@ -370,7 +389,7 @@ class StabilityVerifier:
 
         Returns
         -------
-        GrüneHorizonReport
+        report : GrüneHorizonReport
             A report indicating applicability and estimates of gamma, alpha_N, and required horizon.
         """
         cfg0 = self.dataset[0].config
@@ -436,7 +455,7 @@ class StabilityVerifier:
             Stability report indicating whether the dataset passes empirical checks.
         """
         verifier = StabilityVerifier(dataset, solver)
-        lyap_report = verifier.lyapunov_decrease(alpha_required=alpha_required, min_cost_threshold=min_cost_threshold)
+        lyap_report = verifier.strict_asymptotic_stability(alpha_required=alpha_required, min_cost_threshold=min_cost_threshold)
         grune_report = verifier.grüne_horizon_condition(min_cost_threshold=min_cost_threshold)
 
         gruene_pass = bool(grune_report.applicability and grune_report.is_stable)

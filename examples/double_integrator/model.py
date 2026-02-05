@@ -13,10 +13,9 @@ import mpc_datagen.linalg as mdg_linalg
 import mpc_datagen.plots as mdg_plots
 from mpc_datagen import *
 from mpc_datagen.verification import (
-    StabilityCertifier,
     StabilityVerifier,
     VerificationRender,
-    ROACertifier,
+    ROAVerifier,
 )
 
 
@@ -233,10 +232,8 @@ if __name__ == "__main__":
         dataset.validate()
         dataset.save(f"data/double_integrator_{terminal_mode}_N{N}_data")
 
-        # 1) Empirical verifier aggregated over the dataset
-        cert_stats = StabilityCertifier.certify(solver)
+        # Empirical verifier aggregated over the dataset
         veri_stats = StabilityVerifier.verify(dataset, solver, alpha_required=1e-4)
-        VerificationRender(cert_stats).render()
         VerificationRender(veri_stats).render()
         
         
@@ -266,7 +263,7 @@ if __name__ == "__main__":
                 use_optimal_v=False,
                 html_path=f"plots/double_integrator_{terminal_mode}_N{N}_lyapunov.html",)
             
-            roa_cert = ROACertifier(subdataset[0].config)
+            roa_cert = ROAVerifier(subdataset[0].config)
             roa_bounds, c_min = roa_cert.roa_bounds()
             mdg_plots.roa(
                 lyapunov_func=roa_lyap_fun,

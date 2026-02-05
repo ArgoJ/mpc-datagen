@@ -9,7 +9,7 @@ from ..linalg import sym
 
 __logger__ = PackageLogger.get_logger(__name__)
 
-class ROACertifier:
+class ROAVerifier:
     def __init__(self, cfg: MPCConfig):
         """
         Initializes the certifier with an MPC configuration.
@@ -69,9 +69,11 @@ class ROACertifier:
         """
         Iterates over all constraints in the config and returns the maximum level set value c.
         
-        Returns:
-            float: The scalar c such that x^T P x <= c satisfies all constraints.
-                   Returns infinity if no constraints are active.
+        Returns
+        -------
+        c : float
+            The scalar c such that x^T P x <= c satisfies all constraints.  
+            Returns infinity if no constraints are active.
         """
         nx = self.cfg.nx
         nu = self.cfg.nu

@@ -10,7 +10,7 @@ class StabilityReport:
     message: str = ""
 
 @dataclass
-class LyapunovDecreaseReport(StabilityReport):
+class AsymptoticStabilityReport(StabilityReport):
     method: str = "Lyapunov Decrease"
     min_alpha: Optional[float] = float("nan")
     max_violation: Optional[float] = float("nan")
