@@ -230,8 +230,8 @@ if __name__ == "__main__":
         sampler = Sampler(
             bound_type="absolute",
             bounds=x0_bounds,
-            min_dist=np.array([2e-1, 1e-2]),
-            max_tries=100,
+            min_dist=np.array([1e-2, 1e-3]),
+            max_tries=1000,
             seed=42,
         )
         eps_cfg = EpsBandConfig(
@@ -300,7 +300,7 @@ if __name__ == "__main__":
         N=20,
         x0_bounds=np.array([[-1.0, -1.0], [1.0, 1.0]]),
         T_sim=25,
-        n_samples=200,
+        n_samples=10000,
         bounds_scale=10.0,
         terminal_box_halfwidth=2.0,
     )
@@ -312,7 +312,7 @@ if __name__ == "__main__":
         N=25,
         x0_bounds=np.array([[-1.0, -1.0], [1.0, 1.0]]),
         T_sim=25,
-        n_samples=200,
+        n_samples=10000,
         bounds_scale=10.0,
         terminal_box_halfwidth=2.0,
     )
@@ -324,7 +324,7 @@ if __name__ == "__main__":
         N=40,
         x0_bounds=np.array([[-1.0, -1.0], [1.0, 1.0]]),
         T_sim=25,
-        n_samples=200,
+        n_samples=10000,
         bounds_scale=50.0,
         terminal_box_halfwidth=2.0,
     )
