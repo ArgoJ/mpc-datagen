@@ -37,7 +37,7 @@ def _arrays_equal(a: NDArray | None, b: NDArray | None) -> bool:
     return np.array_equal(a_arr, b_arr)
 
 def _values_equal(a, b) -> bool:
-    if isinstance(a, NDArray) or isinstance(b, NDArray):
+    if isinstance(a, np.ndarray) or isinstance(b, np.ndarray):
         return _arrays_equal(a, b)
     if isinstance(a, (float, np.floating)) or isinstance(b, (float, np.floating)):
         return bool(np.isclose(a, b))
