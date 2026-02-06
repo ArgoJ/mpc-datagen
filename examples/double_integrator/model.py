@@ -254,7 +254,7 @@ if __name__ == "__main__":
         VerificationRender(veri_stats).render()
 
 
-        subdataset = dataset[:min(100, n_samples)]
+        subdataset = dataset[:min(200, n_samples)]
         mdg_plots.relaxed_dp_residual(
             dataset=subdataset,
             html_path=f"plots/double_integrator_{terminal_mode}_N{N}_relaxed_dp_res.html",)
@@ -300,7 +300,7 @@ if __name__ == "__main__":
         N=20,
         x0_bounds=np.array([[-1.0, -1.0], [1.0, 1.0]]),
         T_sim=25,
-        n_samples=10000,
+        n_samples=200,
         bounds_scale=10.0,
         terminal_box_halfwidth=2.0,
     )
@@ -312,7 +312,7 @@ if __name__ == "__main__":
         N=25,
         x0_bounds=np.array([[-1.0, -1.0], [1.0, 1.0]]),
         T_sim=25,
-        n_samples=10000,
+        n_samples=200,
         bounds_scale=10.0,
         terminal_box_halfwidth=2.0,
     )
@@ -324,7 +324,7 @@ if __name__ == "__main__":
         N=40,
         x0_bounds=np.array([[-1.0, -1.0], [1.0, 1.0]]),
         T_sim=25,
-        n_samples=10000,
+        n_samples=200,
         bounds_scale=50.0,
         terminal_box_halfwidth=2.0,
     )

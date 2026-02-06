@@ -18,6 +18,38 @@ COLORS = [
 ]
 
 
+SUMMARY_LINE_THRESHOLD = 100
+
+
+def _nanpad_stack_1d(series_list: list[NDArray]) -> NDArray:
+    """Stack 1D series with NaN padding to common length.
+
+    Parameters
+    ----------
+    series_list : list[NDArray]
+        Each entry is a 1D array of potentially different length.
+
+    Returns
+    -------
+    NDArray
+        Array of shape (n_series, max_len) padded with NaNs.
+    """
+    if len(series_list) == 0:
+        return np.empty((0, 0), dtype=float)
+
+    lengths = [int(np.asarray(s).reshape(-1).shape[0]) for s in series_list]
+    max_len = int(max(lengths))
+    stacked = np.full((len(series_list), max_len), np.nan, dtype=float)
+
+    for i, s in enumerate(series_list):
+        s1 = np.asarray(s, dtype=float).reshape(-1)
+        if s1.size == 0:
+            continue
+        stacked[i, : s1.size] = s1
+
+    return stacked
+
+
 def _order_boundary_points_xy(x: NDArray, y: NDArray) -> NDArray:
     """Order 2D boundary points by polar angle around centroid.
 
@@ -481,47 +513,107 @@ def relaxed_dp_residual(
 
     fig = go.Figure()
 
+    per_entry = []  # list of tuples (id, deltas)
+
     for entry in dataset:
         traj = entry.trajectory
         cost = entry.config.cost
         id = entry.meta.id
 
-        if traj.V_N is None or np.all(np.isnan(traj.V_N)):
-            __logger__.warning(f"Entry {id} has invalid costs; skipping.")
+        if traj.V_N is None:
+            __logger__.warning(f"Entry {id} missing V_N; skipping.")
             continue
 
-        num_steps = min(len(traj.V_N) - 1, traj.inputs.shape[0], traj.states.shape[0] - 1)
-
+        # Ensure consistent lengths across V_N, states, and inputs.
+        num_steps = min(
+            int(len(traj.V_N) - 1),
+            int(traj.inputs.shape[0]),
+            int(traj.states.shape[0] - 1),
+        )
         if num_steps <= 0:
             __logger__.warning(f"Entry {id} has insufficient steps; skipping.")
             continue
 
-        deltas = np.full(num_steps, np.nan)
+        x = traj.states[:num_steps]
+        u = traj.inputs[:num_steps]
+        l_n = np.asarray(cost.get_stage_cost(x, u), dtype=float).reshape(-1)
+        V_curr = np.asarray(traj.V_N[:num_steps], dtype=float).reshape(-1)
+        V_next = np.asarray(traj.V_N[1 : num_steps + 1], dtype=float).reshape(-1)
 
-        for n in range(num_steps):
-            x_n = traj.states[n]
-            u_n = traj.inputs[n]
+        deltas = V_next - V_curr + l_n
+        per_entry.append((id, deltas))
 
-            if not (np.all(np.isfinite(x_n)) and np.all(np.isfinite(u_n))):
-                continue
+    n_lines = len(per_entry)
 
-            l_n = cost.get_stage_cost(x_n, u_n)
-            deltas[n] = traj.V_N[n + 1] - traj.V_N[n] + l_n
-            
+    if n_lines > SUMMARY_LINE_THRESHOLD:
+        __logger__.info(
+            f"relaxed_dp_residual: {n_lines} lines exceed threshold {SUMMARY_LINE_THRESHOLD}; plotting summary stats."
+        )
+        stacked = _nanpad_stack_1d([d for _, d in per_entry])
+        steps = np.arange(stacked.shape[1])
 
-        color = COLORS[id % len(COLORS)]
+        y_min = np.nanmin(stacked, axis=0)
+        y_max = np.nanmax(stacked, axis=0)
+        y_mean = np.nanmean(stacked, axis=0)
+        y_median = np.nanmedian(stacked, axis=0)
 
         fig.add_trace(
             go.Scatter(
-                x=np.arange(num_steps),
-                y=deltas,
+                x=steps,
+                y=y_max,
                 mode='lines',
-                name=f'Run {id+1} - s<sub>n</sub>',
-                line=dict(color=color, width=2),
-                legendgroup=f'Run {id+1}',
-                showlegend=True
+                name='max',
+                line=dict(color='red', width=2),
+                showlegend=True,
             )
         )
+        # Fill the envelope between max (previous trace) and min (this trace).
+        fig.add_trace(
+            go.Scatter(
+                x=steps,
+                y=y_min,
+                mode='lines',
+                name='min',
+                line=dict(color='red', width=2),
+                fill='tonexty',
+                fillcolor='rgba(255,0,0,0.3)',
+                showlegend=True,
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=steps,
+                y=y_mean,
+                mode='lines',
+                name='mean',
+                line=dict(color='black', width=2, dash='dash'),
+                showlegend=True,
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=steps,
+                y=y_median,
+                mode='lines',
+                name='median',
+                line=dict(color='blue', width=2),
+                showlegend=True,
+            )
+        )
+    else:
+        for id, deltas in per_entry:
+            color = COLORS[id % len(COLORS)]
+            fig.add_trace(
+                go.Scatter(
+                    x=np.arange(deltas.shape[0]),
+                    y=deltas,
+                    mode='lines',
+                    name=f'Run {id+1} - s<sub>n</sub>',
+                    line=dict(color=color, width=2),
+                    legendgroup=f'Run {id+1}',
+                    showlegend=True,
+                )
+            )
 
     fig.add_trace(
         go.Scatter(
@@ -565,8 +657,11 @@ def cost_descent(
     where $V_k$ is the MPC cost-to-go at time step $k$ (taken from the stored
     per-step value function / objective).
 
-    Visual interpretation: values above 0 violate the one-step descent
+    Visual interpretation
+    ---------------------
+    Values above 0 violate the one-step descent
     inequality $V(x_{k+1}) - V(x_k) \le 0$.
+
     Parameters
     ----------
     dataset : MPCDataset
@@ -580,34 +675,103 @@ def cost_descent(
 
     fig = go.Figure()
 
+    per_entry_deltas = []  # list of tuples (id, deltas_2d)
+    total_lines = 0
+
     for entry in dataset:
         traj = entry.trajectory
         id = entry.meta.id
 
-        if traj.V_horizon is None:
-            __logger__.warning(f"Entry {id} missing horizon_costs; skipping.")
-            continue
-
         V = traj.V_pred
-        deltas = V[:, 1:] - V[:, :-1]
-        steps = np.tile(np.arange(deltas.shape[1]), (deltas.shape[0], 1))
+        deltas_2d = V[:, 1:] - V[:, :-1]
+        per_entry_deltas.append((id, deltas_2d))
+        total_lines += int(deltas_2d.shape[0])
 
-        deltas = _plotly_multiline(deltas)
-        steps = _plotly_multiline(steps)
+    if total_lines > SUMMARY_LINE_THRESHOLD:
+        __logger__.info(
+            f"cost_descent: {total_lines} lines exceed threshold {SUMMARY_LINE_THRESHOLD}; plotting summary stats."
+        )
+        n_steps = max(int(d.shape[1]) for _, d in per_entry_deltas)
+        all_lines = []
+        for _, d in per_entry_deltas:
+            if d.shape[1] == n_steps:
+                all_lines.append(d)
+            else:
+                padded = np.full((d.shape[0], n_steps), np.nan, dtype=float)
+                padded[:, : d.shape[1]] = d
+                all_lines.append(padded)
 
-        color = COLORS[id % len(COLORS)]
+        stacked = np.vstack(all_lines)  # (total_lines, n_steps)
+        steps = np.arange(n_steps)
+
+        y_min = np.nanmin(stacked, axis=0)
+        y_max = np.nanmax(stacked, axis=0)
+        y_mean = np.nanmean(stacked, axis=0)
+        y_median = np.nanmedian(stacked, axis=0)
 
         fig.add_trace(
             go.Scatter(
                 x=steps,
-                y=deltas,
+                y=y_max,
                 mode='lines',
-                name=f'Run {id+1} - ΔV',
-                line=dict(color=color, width=2),
-                legendgroup=f'Run {id+1}',
-                showlegend=True
+                name='max',
+                line=dict(color='red', width=2),
+                showlegend=True,
             )
         )
+        # Fill the envelope between max (previous trace) and min (this trace).
+        fig.add_trace(
+            go.Scatter(
+                x=steps,
+                y=y_min,
+                mode='lines',
+                name='min',
+                line=dict(color='red', width=2),
+                fill='tonexty',
+                fillcolor='rgba(255,0,0,0.3)',
+                showlegend=True,
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=steps,
+                y=y_mean,
+                mode='lines',
+                name='mean',
+                line=dict(color='black', width=2, dash='dash'),
+                showlegend=True,
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=steps,
+                y=y_median,
+                mode='lines',
+                name='median',
+                line=dict(color='blue', width=2),
+                showlegend=True,
+            )
+        )
+    else:
+        for id, deltas_2d in per_entry_deltas:
+            steps = np.tile(np.arange(deltas_2d.shape[1]), (deltas_2d.shape[0], 1))
+
+            deltas = _plotly_multiline(deltas_2d)
+            steps = _plotly_multiline(steps)
+
+            color = COLORS[id % len(COLORS)]
+
+            fig.add_trace(
+                go.Scatter(
+                    x=steps,
+                    y=deltas,
+                    mode='lines',
+                    name=f'Run {id+1} - ΔV',
+                    line=dict(color=color, width=2),
+                    legendgroup=f'Run {id+1}',
+                    showlegend=True,
+                )
+            )
 
     fig.add_trace(
         go.Scatter(
