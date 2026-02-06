@@ -221,13 +221,23 @@ if __name__ == "__main__":
             terminal_box_halfwidth=terminal_box_halfwidth,
         )
 
+        sampler = Sampler(
+            bound_type="absolute",
+            bounds=x0_bounds,
+            min_dist=np.array([2e-1, 1e-2]),
+            max_tries=100,
+            seed=42,
+        )
+        eps_cfg = EpsBandConfig(
+            eps_band=np.array([0.2, 1e-2]), 
+            eps_consecutive=3
+        )
         generator = MPCDataGenerator(
             solver=solver,
-            x0_bounds=x0_bounds,
             T_sim=T_sim,
+            sampler=sampler,
             reset_solver=True,
-            break_on=BreakOn.ALL,
-            xeps_cfg=EpsBandConfig(eps_band=np.array([0.2, 1e-2]), eps_consecutive=3)
+            xeps_cfg=eps_cfg,
         )
         dataset = generator.generate(n_samples=n_samples)
         dataset.validate()
@@ -236,8 +246,8 @@ if __name__ == "__main__":
         # Empirical verifier aggregated over the dataset
         veri_stats = StabilityVerifier.verify(dataset, solver, alpha_required=1e-4)
         VerificationRender(veri_stats).render()
-        
-        
+
+
         subdataset = dataset[:min(100, n_samples)]
         mdg_plots.relaxed_dp_residual(
             dataset=subdataset,
@@ -251,7 +261,7 @@ if __name__ == "__main__":
             control_labels=["Acceleration"],
             time_bound=T_sim * dt,
             html_path=f"plots/double_integrator_{terminal_mode}_N{N}_trajectories.html",)
-        
+
         P = info["P"]
         if P is not None:
             lyap_fun = lambda x: 0.5 * mdg_linalg.weighted_quadratic_norm(x, P)
@@ -263,7 +273,7 @@ if __name__ == "__main__":
                 plot_3d=True,
                 use_optimal_v=False,
                 html_path=f"plots/double_integrator_{terminal_mode}_N{N}_lyapunov.html",)
-            
+
             roa_cert = ROAVerifier(subdataset[0].config)
             roa_bounds, c_min = roa_cert.roa_bounds()
             mdg_plots.roa(
@@ -275,7 +285,7 @@ if __name__ == "__main__":
                 show_level_plane=True,
                 html_path=f"plots/double_integrator_{terminal_mode}_N{N}_roa.html",
             )
-        
+
 
     # Case 1: regional terminal cost + small terminal set (should pass regional proof + empirical)
     run_case(
@@ -284,7 +294,7 @@ if __name__ == "__main__":
         N=20,
         x0_bounds=np.array([[-1.0, -1.0], [1.0, 1.0]]),
         T_sim=25,
-        n_samples=50,
+        n_samples=200,
         bounds_scale=10.0,
         terminal_box_halfwidth=2.0,
     )
@@ -294,9 +304,9 @@ if __name__ == "__main__":
         name="Equilibrium terminal constraint",
         terminal_mode="equilibrium",
         N=25,
-        x0_bounds=np.array([[-0.5, -0.5], [0.5, 0.5]]),
+        x0_bounds=np.array([[-1.0, -1.0], [1.0, 1.0]]),
         T_sim=25,
-        n_samples=50,
+        n_samples=200,
         bounds_scale=10.0,
         terminal_box_halfwidth=2.0,
     )
@@ -308,7 +318,7 @@ if __name__ == "__main__":
         N=40,
         x0_bounds=np.array([[-1.0, -1.0], [1.0, 1.0]]),
         T_sim=25,
-        n_samples=50,
+        n_samples=200,
         bounds_scale=50.0,
         terminal_box_halfwidth=2.0,
     )

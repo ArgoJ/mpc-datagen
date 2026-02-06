@@ -12,24 +12,6 @@ from ..extractor import MPCConfigExtractor
 
 __logger__ = logging.getLogger(__name__)
 
-class BreakOn(IntEnum):
-    """Enumeration for conditions to break the closed-loop simulation early.
-    
-    Attributes
-    ----------
-    NONE
-        No early stopping, run for the full T_sim.
-    INFEASIBLE
-        Stop if the solver returns an infeasibility status code.
-    IN_EPS
-        Stop if the state remains within an epsilon band around the reference for a specified number of consecutive steps.
-    ALL
-        Stop if all conditions (infeasibility and epsilon band) are met.
-    """
-    NONE = 0
-    INFEASIBLE = 1
-    IN_EPS = 3
-    ALL = 4
 
 @dataclass
 class EpsBandConfig:
@@ -89,7 +71,6 @@ def solve_mpc_closed_loop(
     integrator: AcadosSimSolver | None = None,
     cfg: MPCConfig | None = None,
     T_sim: int | None = None,
-    break_on: BreakOn = BreakOn.INFEASIBLE,
     xeps_cfg: EpsBandConfig | None = None,
 ) -> MPCData:
     """
@@ -105,11 +86,8 @@ def solve_mpc_closed_loop(
         Configuration dictionary to store in MPCData.
     T_sim : int, optional
         Number of simulation steps. If None, uses cfg.T_sim.
-    break_on : BreakOn
-        Condition to break the simulation loop.
     xeps_cfg : EpsBandConfig | None
-        Configuration for epsilon band checks used when `break_on` is
-        `BreakOn.IN_EPS` or `BreakOn.ALL`.
+        Configuration for epsilon band checks.
 
     Returns
     -------
@@ -124,9 +102,6 @@ def solve_mpc_closed_loop(
         
     if T_sim is not None:
         cfg.T_sim = T_sim
-
-    if break_on in (BreakOn.IN_EPS, BreakOn.ALL) and xeps_cfg is None:
-        xeps_cfg = EpsBandConfig()
         
     # Initialize Trajectory container with NaNs
     traj = MPCTrajectory.empty_from_cfg(cfg)
@@ -149,11 +124,10 @@ def solve_mpc_closed_loop(
         solver.set(0, "ubx", current_x)
         
         status = solver.solve()
-        if status != 0:
-            if break_on in (BreakOn.INFEASIBLE, BreakOn.ALL) and status == 1:
-                __logger__.warning(f"Solver failed at step {i} with status {status}. Stopping.")
-                is_feasible_run = False
-                break
+        if status not in (0, 5):
+            __logger__.warning(f"Solver failed at step {i} with status {status}. Stopping.")
+            is_feasible_run = False
+            break
 
         status_codes.append(status)
         solve_times.append(solver.get_stats("time_tot"))
@@ -178,7 +152,7 @@ def solve_mpc_closed_loop(
 
         # Optional early stop if within eps band
         should_break_eps = False
-        if break_on in (BreakOn.IN_EPS, BreakOn.ALL):
+        if xeps_cfg is not None:
             # Only count successful solves towards the streak.
             if status == 0 and _in_state_band(current_x, cfg, xeps_cfg.eps_band):
                 in_eps_streak += 1

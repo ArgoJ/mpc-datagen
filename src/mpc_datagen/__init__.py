@@ -1,4 +1,4 @@
-from .generation import MPCDataGenerator, BreakOn, EpsBandConfig
+from .generation import MPCDataGenerator, EpsBandConfig, Sampler
 from .mpc_data import (
     MPCData,
     MPCDataset,
@@ -23,6 +23,6 @@ __all__ = [
     "LinearLSCost",
     "LinearSystem",
     "Constraints",
-    "BreakOn",
     "EpsBandConfig",
+    "Sampler",
 ]
