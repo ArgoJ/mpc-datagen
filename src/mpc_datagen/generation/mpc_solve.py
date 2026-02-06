@@ -2,7 +2,6 @@ import time
 import logging
 import numpy as np
 
-from typing import Optional
 from acados_template import AcadosOcpSolver, AcadosSimSolver
 from enum import IntEnum
 
@@ -14,16 +13,15 @@ __logger__ = logging.getLogger(__name__)
 class BreakOn(IntEnum):
     NONE = 0
     INFEASIBLE = 1
-    UNBOUNDED = 2
     IN_EPS = 3
     ALL = 4
 
 
 def solve_mpc_closed_loop(
     solver: AcadosOcpSolver,
-    integrator: Optional[AcadosSimSolver] = None,
-    cfg: Optional[MPCConfig] = None,
-    T_sim: Optional[int] = None,
+    integrator: AcadosSimSolver | None = None,
+    cfg: MPCConfig | None = None,
+    T_sim: int | None = None,
     break_on: BreakOn = BreakOn.INFEASIBLE
 ) -> MPCData:
     """

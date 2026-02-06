@@ -20,8 +20,8 @@ class LyapunovDescentReport(StabilityReport):
 @dataclass
 class AsymptoticStabilityReport(StabilityReport):
     method: str = "Asymptotic Stability Check"
-    min_alpha: Optional[float] = float("nan")
-    max_violation: Optional[float] = float("nan")
+    min_alpha: float = float("nan")
+    max_violation: float = float("nan")
     applicability: bool = True # Always applicable
 
 @dataclass
@@ -33,8 +33,8 @@ class GrüneHorizonReport(StabilityReport):
 
 @dataclass
 class AlphaViolationStats:
-    min_alpha: Optional[float] = None
-    max_violation: Optional[float] = None
-    min_residual: Optional[float] = None
+    min_alpha: float = float("nan")
+    max_violation: float = float("nan")
+    min_residual: float = float("nan")  
     n_used: int = 0
 

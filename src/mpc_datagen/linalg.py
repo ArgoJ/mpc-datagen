@@ -1,7 +1,6 @@
 import numpy as np
 import casadi as ca
 
-from typing import Tuple
 
 def weighted_quadratic_norm(x: np.ndarray, W: np.ndarray) -> np.ndarray:
     """
@@ -112,7 +111,7 @@ def discretize_and_linearize_rk4(
     x_lin: np.ndarray,
     u_lin: np.ndarray,
     num_steps: int = 1,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Discretize and linearize continuous-time dynamics using RK4 method.
 
     Parameters
@@ -130,9 +129,9 @@ def discretize_and_linearize_rk4(
 
     Returns
     -------
-    Ad, Bd : ndarray
+    Ad, Bd : np.ndarray
         Discrete-time state and input matrix.
-    gd : ndarray
+    gd : np.ndarray
         Discretization offset term.
     """
     f_fun = ca.Function("f_fun", [x_sym, u_sym], [f_expl_expr])
@@ -158,12 +157,12 @@ def discretize_and_linearize_rk4(
     return Ad, Bd, gd
 
 
-def lin_c2d_rk4(A: np.ndarray, B: np.ndarray, dt: float, num_steps: int = 1) -> Tuple[np.ndarray, np.ndarray]:
+def lin_c2d_rk4(A: np.ndarray, B: np.ndarray, dt: float, num_steps: int = 1) -> tuple[np.ndarray, np.ndarray]:
     """Discretize linear system x_dot = A x + B u using RK4 method.
 
     Parameters
     ----------
-    A, B : ndarray
+    A, B : np.ndarray
         Continuous-time state and input matrix.
     dt : float
         Discretization time step.
@@ -172,7 +171,7 @@ def lin_c2d_rk4(A: np.ndarray, B: np.ndarray, dt: float, num_steps: int = 1) -> 
 
     Returns
     -------
-    Ad, Bd : ndarray
+    Ad, Bd : np.ndarray
         Discrete-time state and input matrix.
     """
     n = A.shape[0]

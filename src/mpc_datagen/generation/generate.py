@@ -1,5 +1,5 @@
 import numpy as np
-from typing import Optional, Tuple
+
 from acados_template import AcadosOcpSolver
 from tqdm import tqdm
 from dataclasses import replace
@@ -19,7 +19,7 @@ class MPCDataGenerator:
         x0_bounds: np.ndarray,
         T_sim: int,
         break_on: BreakOn = BreakOn.INFEASIBLE,
-        seed: Optional[int] = None,
+        seed: int | None = None,
         verbose: bool = True,
         bound_type: str = "absolute",
         reset_solver: bool = False,
@@ -145,7 +145,7 @@ class MPCDataGenerator:
         return dataset
 
     @staticmethod
-    def _calculate_percentage_bounds(lbx: np.ndarray, ubx: np.ndarray, percentages: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    def _calculate_percentage_bounds(lbx: np.ndarray, ubx: np.ndarray, percentages: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Shrink bounds symmetrically around the midpoint using the provided percentages"""
         mid = 0.5 * (lbx + ubx)
         half_range = 0.5 * (ubx - lbx)

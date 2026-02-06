@@ -1,8 +1,9 @@
 from .reports import (
     StabilityReport,
-    GrüneHorizonReport,
+    LyapunovDescentReport,
     AsymptoticStabilityReport,
     AlphaViolationStats,
+    GrüneHorizonReport,
 )
 from .render import VerificationRender
 from .verification import StabilityVerifier
@@ -15,9 +16,10 @@ __all__ = [
     
 	# Reports
 	"StabilityReport",
-    "GrüneHorizonReport", 
-    "AsymptoticStabilityReport", 
+    "LyapunovDescentReport",
+    "AsymptoticStabilityReport",
     "AlphaViolationStats",
+    "GrüneHorizonReport",  
 
     "TerminalIngredientsReport",
     "GruneNoTerminalCertificateReport",

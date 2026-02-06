@@ -7,7 +7,6 @@ import numpy as np
 from scipy.linalg import solve_discrete_are, block_diag
 from casadi import SX
 from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
-from typing import Optional, Tuple
 
 import mpc_datagen.linalg as mdg_linalg
 import mpc_datagen.plots as mdg_plots
@@ -67,14 +66,14 @@ def get_ocp_solver(
     B_c: np.ndarray, 
     Q: np.ndarray, 
     R: np.ndarray,
-    P: Optional[np.ndarray] = None,
+    P: np.ndarray | None = None,
     dt: float = 0.1, 
     N: int = 20,
     tol: float = 1e-8,
     terminal_mode: str = "regional",
     bounds_scale: float = 10.0,
     terminal_box_halfwidth: float = 1.0,
-) -> Tuple[AcadosOcpSolver, dict]:
+) -> tuple[AcadosOcpSolver, dict]:
     """Create an acados OCP solver for a continuous-time linear system.
 
     Parameters

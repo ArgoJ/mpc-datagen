@@ -521,11 +521,11 @@ class StabilityVerifier:
 
         if asym_stab_report.is_stable and descent_report.is_stable:
             msg = (
-                f"PASS. Lyapunov descent observed with min_alpha={asym_stab_report.min_alpha:.3e}, "
+                f"PASS. Asymptotic stability estimated with min_alpha={asym_stab_report.min_alpha:.3e}, "
                 f"alpha_required={alpha_required:.3e}, and no descent violations.")
         elif not asym_stab_report.is_stable and descent_report.is_stable:
             msg = (
-                f"PASS. Asymptotic stability estimated with alpha={asym_stab_report.min_alpha:.3e} "
+                f"PASS. Lyapunov descent observed with alpha={asym_stab_report.min_alpha:.3e} "
                 f"and alpha_required={alpha_required:.3e}.")
         elif gruene_pass:
             msg = (

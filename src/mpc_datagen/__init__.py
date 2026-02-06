@@ -1,5 +1,14 @@
-from .generation import MPCDataGenerator, solve_mpc_closed_loop, BreakOn
-from .mpc_data import MPCData, MPCDataset, MPCConfig, MPCMeta, MPCTrajectory
+from .generation import MPCDataGenerator, BreakOn
+from .mpc_data import (
+    MPCData,
+    MPCDataset,
+    MPCConfig,
+    MPCMeta,
+    MPCTrajectory,
+    LinearLSCost,
+    LinearSystem,
+    Constraints,
+)
 from .package_logger import PackageLogger
 
 logger = PackageLogger.setup()
@@ -11,6 +20,8 @@ __all__ = [
     "MPCConfig",
     "MPCMeta",
     "MPCTrajectory",
-    "solve_mpc_closed_loop",
+    "LinearLSCost",
+    "LinearSystem",
+    "Constraints",
     "BreakOn",
 ]

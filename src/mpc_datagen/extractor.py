@@ -1,6 +1,6 @@
 import numpy as np
 
-from typing import Any, Literal, Optional, Tuple
+from typing import Any, Literal
 from acados_template import AcadosOcpSolver
 
 from .mpc_data import MPCConfig, LinearSystem
@@ -18,8 +18,8 @@ def ensure_linear_ls_cost_type(cost_type: Literal['LINEAR_LS', 'NONLINEAR_LS']) 
         return False
     return True
 
-def _is_none(*values: Optional[Any]) -> Any:
-    """Ensure that a value is not None, otherwise raise an error."""
+def _is_none(*values: Any) -> Any:
+    """Ensure that a value is not None."""
     for val in values:
         if val is None:
             return True
@@ -28,10 +28,10 @@ def _is_none(*values: Optional[Any]) -> Any:
 
 # --- Extracts ---
 def extract_stage_reference(
-    yref: Optional[np.ndarray],
+    yref: np.ndarray | None,
     nx: int, 
     nu: int
-) -> Optional[tuple[np.ndarray, np.ndarray]]:
+) -> tuple[np.ndarray, np.ndarray] | None:
     """Extraction of (x*, u*) from yref."""
     if _is_none(yref, nx, nu):
         return None
@@ -51,7 +51,7 @@ def extract_stage_reference(
     return x_ref, u_ref
 
 
-def extract_terminal_reference(yref_e: Optional[np.ndarray], nx: int) -> Optional[np.ndarray]:
+def extract_terminal_reference(yref_e: np.ndarray | None, nx: int) -> np.ndarray | None:
     """Extraction of x_e* from yref_e."""
     if _is_none(yref_e, nx):
         return None
@@ -67,11 +67,11 @@ def extract_terminal_reference(yref_e: Optional[np.ndarray], nx: int) -> Optiona
 
 
 def indexed_bounds(
-    lb: np.ndarray,
-    ub: np.ndarray,
-    idx: np.ndarray,
+    lb: np.ndarray | None,
+    ub: np.ndarray | None,
+    idx: np.ndarray | None,
     dim: int,
-) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+) -> tuple[np.ndarray, np.ndarray] | None:
     """Reconstruct full bounds vectors from acados indexed bounds."""
     if _is_none(lb, ub, idx):
         return None
@@ -102,7 +102,7 @@ def extract_QR(
     W: np.ndarray, 
     Vx: np.ndarray, 
     Vu: np.ndarray
-) -> Optional[tuple[np.ndarray, np.ndarray]]:
+) -> tuple[np.ndarray, np.ndarray] | None:
     """Extracts Q, R from the cost configuration."""
     if _is_none(W, Vx, Vu):
         return None
@@ -119,7 +119,7 @@ def extract_QR(
 def extract_Qf(
     W_e: np.ndarray,
     Vx_e: np.ndarray
-) -> Optional[np.ndarray]:
+) -> np.ndarray | None:
     """Extracts Qf from the terminal cost configuration."""
     if _is_none(W_e, Vx_e):
         return None
@@ -230,7 +230,7 @@ class MPCConfigExtractor():
         x_lin, u_lin = self._extract_x_and_u_lin()
         self.cfg.model = self._extract_discretized_dynamics(x_lin, u_lin, self.cfg.dt)
 
-    def _extract_x_and_u_lin(self) -> Tuple[np.ndarray, np.ndarray]:
+    def _extract_x_and_u_lin(self) -> tuple[np.ndarray, np.ndarray]:
         """Get linearization points for state and input."""
         if self.cfg.cost.yref.shape[0] != (self.cfg.nx + self.cfg.nu):
             raise ValueError(

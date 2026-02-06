@@ -1,6 +1,5 @@
 import numpy as np
 import scipy.linalg as sla
-from typing import List, Optional
 
 from ..mpc_data import MPCConfig
 from ..package_logger import PackageLogger
@@ -44,7 +43,7 @@ class ROAVerifier:
         
         return P, K
 
-    def _calc_limit_c(self, h_vec: np.ndarray, k_val: float, name: str) -> Optional[float]:
+    def _calc_limit_c(self, h_vec: np.ndarray, k_val: float, name: str) -> float | None:
         """
         Calculates the max level set c for a single constraint h^T x <= k.
         Returns None if the constraint is not active or invalid.
@@ -79,7 +78,7 @@ class ROAVerifier:
         nu = self.cfg.nu
         cons = self.cfg.constraints
         
-        candidates: List[float] = []
+        candidates: list[float] = []
     
         def add(h, k, n):
             abs_k = abs(k)

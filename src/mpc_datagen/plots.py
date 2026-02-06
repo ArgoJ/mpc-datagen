@@ -2,7 +2,7 @@ import numpy as np
 import os
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from typing import Callable, List, Optional, Tuple
+from collections.abc import Callable
 
 from .mpc_data import MPCDataset
 from .package_logger import PackageLogger
@@ -42,11 +42,11 @@ def _plotly_multiline(x: np.ndarray, axis: int=0):
 
 def mpc_trajectories(
     dataset: MPCDataset,
-    state_labels: list,
-    control_labels: list,
+    state_labels: list[str],
+    control_labels: list[str],
     plot_predictions: bool = False,
-    time_bound: Optional[float] = None,  
-    html_path: Optional[str] = None
+    time_bound: float | None = None,  
+    html_path: str | None = None
 ) -> None:
     """Plot MPC trajectories for states and controls using Plotly.
 
@@ -54,9 +54,9 @@ def mpc_trajectories(
     ----------
     dataset : MPCDataset
         The dataset containing trajectories to plot.
-    state_labels : list
+    state_labels : list[str]
         List of labels for each state variable.
-    control_labels : list
+    control_labels : list[str]
         List of labels for each control variable.
     plot_predictions : bool, optional
         If True, plot the OCP predictions at each step. Default is False.
@@ -240,12 +240,12 @@ def mpc_trajectories(
 def lyapunov(
     dataset: MPCDataset,
     lyapunov_func: Callable[[np.ndarray], np.ndarray],
-    state_indices: List[int] = [0, 1],
-    state_labels: Optional[List[str]] = None,
-    limits: Optional[List[Tuple[float, float]]] = None,
+    state_indices: list[int] = [0, 1],
+    state_labels: list[str] | None = None,
+    limits: list[tuple[float, float]] | None = None,
     resolution: int = 100,
     plot_3d: bool = False,
-    html_path: Optional[str] = None,
+    html_path: str | None = None,
     use_optimal_v: bool = False
 ) -> None:
     """Plot the Lyapunov function landscape and MPC trajectories in 2D or 3D.
@@ -257,9 +257,9 @@ def lyapunov(
         The dataset containing trajectories to plot.
     lyapunov_func : Callable[[np.ndarray], np.ndarray]
         A function that takes a state vector and returns the Lyapunov value.
-    state_indices : list, optional
+    state_indices : list[int], optional
         Indices of the two state variables to plot (x, y axes). Default is [0, 1].
-    limits : list of tuples, optional
+    limits : list[tuple[float, float]], optional
         ((min_x, max_x), (min_y, max_y)). If None, inferred from data with padding.
     resolution : int, optional
         Grid resolution for the Lyapunov function contour plot.
@@ -451,7 +451,7 @@ def lyapunov(
 
 def relaxed_dp_residual(
     dataset: MPCDataset,
-    html_path: Optional[str] = None
+    html_path: str | None = None
 ) -> None:
     """Plot Lyapunov-style one-step descent check.
 
@@ -472,11 +472,6 @@ def relaxed_dp_residual(
         The dataset containing trajectories to plot.
     html_path : str, optional
         If provided, saves the plot to the specified HTML file.
-
-    Returns
-    -------
-    fig : plotly.graph_objects.Figure
-        The resulting Plotly figure.
     """
     if len(dataset) == 0:
         __logger__.warning("Dataset is empty.")
@@ -576,11 +571,6 @@ def cost_descent(
         The dataset containing trajectories to plot.
     html_path : str, optional
         If provided, saves the plot to the specified HTML file.
-
-    Returns
-    -------
-    fig : plotly.graph_objects.Figure
-        The resulting Plotly figure.
     """
     if len(dataset) == 0:
         __logger__.warning("Dataset is empty.")
@@ -650,13 +640,13 @@ def roa(
     lyapunov_func: Callable[[np.ndarray], np.ndarray],
     c_level: float,
     bounds: np.ndarray,  # shape (n_points, nx)
-    state_indices: List[int] = [0, 1],
-    state_labels: Optional[List[str]] = None,
-    limits: Optional[List[Tuple[float, float]]] = None,
+    state_indices: list[int] = [0, 1],
+    state_labels: list[str] | None = None,
+    limits: list[tuple[float, float]] | None = None,
     resolution: int = 100,
     plot_3d: bool = False,
     show_level_plane: bool = False,
-    html_path: Optional[str] = None
+    html_path: str | None = None
 ) -> None:
     
     if len(state_indices) != 2:
