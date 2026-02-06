@@ -6,7 +6,7 @@ from tqdm import tqdm
 from dataclasses import replace
 
 from .mpc_solve import solve_mpc_closed_loop, EpsBandConfig
-from .sampler import Sampler
+from .sampler import Sampler, SamplerBase
 from ..extractor import MPCConfigExtractor
 from ..mpc_data import MPCDataset
 from ..package_logger import PackageLogger, DEFAULT_MODULE_NAME
@@ -22,7 +22,7 @@ class MPCDataGenerator:
         self,
         solver: AcadosOcpSolver,
         T_sim: int,
-        sampler: Sampler | None = None,
+        sampler: SamplerBase | None = None,
         xeps_cfg: EpsBandConfig | None = None,
         reset_solver: bool = False,
     ):
@@ -52,7 +52,7 @@ class MPCDataGenerator:
         if sampler is None:
             sampler = Sampler()
         self.sampler = sampler
-        self.sampler.cfg_post_init(self.mpc_config)
+        self.sampler.post_init_cfg(self.mpc_config)
 
     def generate(self, n_samples: int) -> MPCDataset:
         """
@@ -75,7 +75,7 @@ class MPCDataGenerator:
 
         try:
             for _ in tqdm(range(n_samples), desc="Generating Trajectories"):
-                x0 = self.sampler.sample_unique_x0(accepted_x0)
+                x0 = self.sampler.sample_x0(accepted_x0)
                 temp_cfg = replace(
                     self.mpc_config, 
                     constraints=replace(self.mpc_config.constraints, x0=x0))

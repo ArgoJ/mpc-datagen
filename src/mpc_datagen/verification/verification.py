@@ -291,7 +291,11 @@ class StabilityVerifier:
 
         return LyapunovDescentReport(
             is_stable=is_stable,
-            message=msg,
+            message=(
+                f"{'PASS' if is_stable else 'FAIL'}: "
+                f"{violation_count}/{total_steps} violations, "
+                f"max_increase={max_increase:.4e}"
+            ),
             max_increase=max_increase,
             violation_count=int(violation_count),
             total_steps=total_steps
@@ -462,7 +466,7 @@ class StabilityVerifier:
         if has_terminal_cost or has_terminal_bounds:
             return GrüneHorizonReport(
                 applicability=False,
-                message="Not applicable: Dataset includes terminal cost/bounds; no-terminal theorem does not directly apply")
+                message="NOT APPLICABLE: Dataset includes terminal cost/bounds; no-terminal theorem does not directly apply")
 
         N = int(cfg0.N)
         gamma_values: list[float] = []
@@ -474,19 +478,24 @@ class StabilityVerifier:
         if not gamma_values:
             return GrüneHorizonReport(
                 applicability=False,
-                message="Not applicable: insufficient data")
+                message="NOT APPLICABLE: insufficient data")
         
         gamma = float(np.max(gamma_values))
         N_required, alpha_N = grune_required_horizon_and_alpha(gamma=gamma, N=N)
         stable_flag = bool((N >= N_required) and (alpha_N > 0.0))
-        
+
         return GrüneHorizonReport(
             applicability=True,
             gamma_estimate=gamma,
             alpha_N_estimate=alpha_N,
             required_horizon=N_required,
             is_stable=stable_flag,
-            message=f"Grüne condition estimated with gamma={gamma:.4f}, alpha_N={alpha_N:.4f}, required_horizon={N_required}<={N}.")
+            message=(
+                f"{'PASS' if stable_flag else 'FAIL'}: "
+                f"gamma={gamma:.4e}, "
+                f"alpha_N={alpha_N:.4e}, "
+                f"required_horizon={N_required}<={N}."
+            ))
 
 
     # --- Certification Interface ---
@@ -527,15 +536,15 @@ class StabilityVerifier:
 
         if asym_stab_report.is_stable and descent_report.is_stable:
             msg = (
-                f"PASS. Asymptotic stability estimated with min_alpha={asym_stab_report.min_alpha:.3e}, "
-                f"alpha_required={alpha_required:.3e}, and no descent violations.")
+                f"PASS. Asymptotic stability estimated with min_alpha={asym_stab_report.min_alpha:.4e}, "
+                f"alpha_required={alpha_required:.4e}, and no descent violations.")
         elif not asym_stab_report.is_stable and descent_report.is_stable:
             msg = (
-                f"PASS. Lyapunov descent observed with alpha={asym_stab_report.min_alpha:.3e} "
-                f"and alpha_required={alpha_required:.3e}.")
+                f"PASS. Lyapunov descent observed with alpha={asym_stab_report.min_alpha:.4e} "
+                f"and alpha_required={alpha_required:.4e}.")
         elif gruene_pass:
             msg = (
-                f"PASS. Grüne horizon condition estimated with gamma={grune_report.gamma_estimate:.3e} "
+                f"PASS. Grüne horizon condition estimated with gamma={grune_report.gamma_estimate:.4e} "
                 f"and required_horizon={grune_report.required_horizon}.")
         else:
             msg = (
@@ -547,8 +556,8 @@ class StabilityVerifier:
             method="Empirical Verification",
             is_stable=bool(gruene_pass or (asym_stab_report.is_stable and descent_report.is_stable)),
             details={
-                "lyapunov_alpha_report": asym_stab_report,
                 "lyapunov_descent_report": descent_report,
+                "asym_stab_report": asym_stab_report,
                 "grune_report": grune_report,
             },
             message=msg,

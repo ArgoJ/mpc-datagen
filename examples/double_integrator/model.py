@@ -20,6 +20,12 @@ from mpc_datagen.verification import (
 )
 
 
+# import logging
+# from mpc_datagen.package_logger import PackageLogger
+
+# PackageLogger.setup(level=logging.DEBUG)
+
+
 
 # %% Model Definition
 def get_model(A: NDArray, B: NDArray) -> AcadosModel:
