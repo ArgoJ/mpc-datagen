@@ -140,15 +140,15 @@ def mpc_trajectories(
                 row=row, col=1
             )
             
-            if plot_predictions and traj.solved_states is not None and not np.all(np.isnan(traj.solved_states)):
+            if plot_predictions and traj.predicted_states is not None and not np.all(np.isnan(traj.predicted_states)):
                 dt = traj.times[1] - traj.times[0] if len(traj.times) > 1 else 0.1
                 
                 # Consolidate prediction lines into one trace with None gaps for performance
                 x_lines = []
                 y_lines = []
                 
-                for k in range(traj.solved_states.shape[0]):
-                    pred_state = traj.solved_states[k, :, i]
+                for k in range(traj.predicted_states.shape[0]):
+                    pred_state = traj.predicted_states[k, :, i]
                     if np.isnan(pred_state).all():
                         continue
                     
@@ -197,14 +197,14 @@ def mpc_trajectories(
                 row=row, col=1
             )
             
-            if plot_predictions and traj.solved_inputs is not None and not np.all(np.isnan(traj.solved_inputs)):
+            if plot_predictions and traj.predicted_inputs is not None and not np.all(np.isnan(traj.predicted_inputs)):
                 dt = traj.times[1] - traj.times[0] if len(traj.times) > 1 else 0.1
                 
                 x_lines = []
                 y_lines = []
                 
-                for k in range(traj.solved_inputs.shape[0]):
-                    pred_input = traj.solved_inputs[k, :, i]
+                for k in range(traj.predicted_inputs.shape[0]):
+                    pred_input = traj.predicted_inputs[k, :, i]
                     if np.isnan(pred_input).all():
                         continue
                     

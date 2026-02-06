@@ -254,7 +254,7 @@ if __name__ == "__main__":
         VerificationRender(veri_stats).render()
 
 
-        subdataset = dataset[:min(200, n_samples)]
+        subdataset = dataset[:min(20, n_samples)]
         mdg_plots.relaxed_dp_residual(
             dataset=subdataset,
             html_path=f"plots/double_integrator_{terminal_mode}_N{N}_relaxed_dp_res.html",)
@@ -266,6 +266,7 @@ if __name__ == "__main__":
             state_labels=["Position", "Velocity"],
             control_labels=["Acceleration"],
             time_bound=T_sim * dt,
+            plot_predictions=True,
             html_path=f"plots/double_integrator_{terminal_mode}_N{N}_trajectories.html",)
 
         P = info["P"]
