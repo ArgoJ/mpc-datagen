@@ -1,6 +1,8 @@
 import numpy as np
 import scipy.linalg as sla
 
+from numpy.typing import NDArray
+
 from ..mpc_data import MPCConfig
 from ..package_logger import PackageLogger
 from ..extractor import extract_QR
@@ -43,7 +45,7 @@ class ROAVerifier:
         
         return P, K
 
-    def _calc_limit_c(self, h_vec: np.ndarray, k_val: float, name: str) -> float | None:
+    def _calc_limit_c(self, h_vec: NDArray, k_val: float, name: str) -> float | None:
         """
         Calculates the max level set c for a single constraint h^T x <= k.
         Returns None if the constraint is not active or invalid.
@@ -112,7 +114,7 @@ class ROAVerifier:
         __logger__.info(f"Computed max ROA level set c = {c_min:.4f}")
         return c_min
 
-    def roa_bounds(self, n_points: int = 200) -> np.ndarray:
+    def roa_bounds(self, n_points: int = 200) -> NDArray:
         """
         Generates points on the boundary of the ellipsoid $V(x) = x^T P x = c$.
         
@@ -130,7 +132,7 @@ class ROAVerifier:
             
         Returns
         -------
-        boundary : np.ndarray 
+        boundary : NDArray 
             Matrix of shape (n_points, nx) with the coordinates of the boundary points.
         c_value : float
             The level set value c used.

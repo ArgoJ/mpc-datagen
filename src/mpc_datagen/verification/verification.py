@@ -1,5 +1,6 @@
 import numpy as np
 
+from numpy.typing import NDArray
 from collections.abc import Generator
 from acados_template import AcadosOcpSolver
 
@@ -36,16 +37,23 @@ class StabilityVerifier:
         self._active_entry: MPCData | None = None
         self.traj : MPCTrajectory | None = None
         self.meta : MPCMeta | None = None
+        self._active_T_sim: int | None = None
         
         self.cfg: MPCConfig | None = None
-        self.sys: LinearSystem | None = None
         if isinstance(solver, AcadosOcpSolver):
             self.cfg = MPCConfigExtractor.get_cfg(solver)
-            self.cfg.T_sim = dataset[0].config.T_sim
-            self.sys = LinearSystemExtractor.get_system(solver)
-        else:
-            raise NotImplementedError(
-                "StabilityVerifier currently only supports verification with AcadosOcpSolver instances.")
+
+    @property
+    def T_sim(self) -> int:
+        """Active simulation horizon for the currently bound entry.
+
+        Note
+        ----
+        `T_sim` is allowed to vary per dataset entry.
+        """
+        if self._active_T_sim is None:
+            raise ValueError("No active entry is bound (internal error).")
+        return int(self._active_T_sim)
 
     def __getitem__(self, index: int) -> MPCData:
         return self.dataset[index]
@@ -66,6 +74,7 @@ class StabilityVerifier:
         self.traj = entry.trajectory
         self.meta = entry.meta
         local_cfg = entry.config
+        self._active_T_sim = int(local_cfg.T_sim)
         
         if self.cfg is None:
             self.cfg = local_cfg
@@ -88,17 +97,11 @@ class StabilityVerifier:
                 "Entry yref does not match solver yref. "
                 "This verifier assumes a single yref for the entire dataset."
             )
-        if self.cfg.T_sim != local_cfg.T_sim:
-            __logger__.warning(
-                f"Entry T_sim ({local_cfg.T_sim}) does not match configuration T_sim ({self.cfg.T_sim}). "
-                "Using dataset T_sim for verification."
-            )
-            self.cfg.T_sim = local_cfg.T_sim
 
-        if self.cfg.T_sim > self.traj.sim_steps:
+        if local_cfg.T_sim > self.traj.sim_steps or local_cfg.T_sim < 1:
             raise ValueError(
-                "Entry T_sim exceeds trajectory length. T_sim must be <= trajectory length."
-                f"{self.cfg.T_sim} > {self.traj.sim_steps}"
+                "Entry T_sim exceeds trajectory length. T_sim must be <= trajectory length and > 1."
+                f"{local_cfg.T_sim} > {self.traj.sim_steps}"
             )
         if self.cfg.constraints.has_bx_e() != local_cfg.constraints.has_bx_e():
             raise ValueError(
@@ -112,7 +115,7 @@ class StabilityVerifier:
             )
 
     def _require_bound_entry(self) -> None:
-        if self._active_entry is None or self.traj is None or self.cfg is None:
+        if self._active_entry is None or self.traj is None or self.cfg is None or self._active_T_sim is None:
             raise ValueError(
                 "No active entry is bound (internal error). Dataset-level methods must bind an entry before calling per-trajectory helpers."
             )
@@ -141,7 +144,7 @@ class StabilityVerifier:
 
 
     # --- L* OPTIMIZATION ---
-    def l_star(self, x: np.ndarray) -> float | np.ndarray:
+    def l_star(self, x: NDArray) -> float | NDArray:
         r"""Lower bound on $\ell^*(x) := \min_\mathbf{u} \ell(x,\mathbf{u})$ via unconstrained minimization.
         This includes bound checks to ensure validity of the lower bound.
         
@@ -232,16 +235,17 @@ class StabilityVerifier:
 
 
     # --- LYAPUNOV DESCENT CHECK ---
-    def lyapunov_descent(self) -> np.ndarray:
+    def lyapunov_descent(self) -> NDArray:
         """Calculate $V_N(x_{k+1}) - V_N(x_k)$ for the current trajectory.
 
         Returns
         -------
-        diffs : np.ndarray
+        diffs : NDArray
             The sequence of Lyapunov differences V_N(x_{k+1}) - V_N(x_k).
             Values <= 0 satisfy the decrease condition.
         """
-        limit = min(self.cfg.T_sim, len(self.traj.V_N))
+        self._require_bound_entry()
+        limit = min(self.T_sim, len(self.traj.V_N))
         if limit < 2:
             return np.array([])
 
@@ -310,7 +314,8 @@ class StabilityVerifier:
         stats : AlphaViolationStats
             The observed minimum alpha and maximum violation statistics.
         """
-        T_limit = min(self.cfg.T_sim, len(self.traj.inputs), len(self.traj.states) - 1, len(self.traj.V_N) - 1)
+        self._require_bound_entry()
+        T_limit = min(self.T_sim, len(self.traj.inputs), len(self.traj.states) - 1, len(self.traj.V_N) - 1)
         if T_limit < 1:
             return AlphaViolationStats()
 
@@ -412,7 +417,8 @@ class StabilityVerifier:
     # --- GRÜNE CONDITION CHECK ---
     def gamma_estimates(self) -> list[float]:
         """Estimate the maximum gamma value over the dataset."""
-        T_limit = min(self.cfg.T_sim, len(self.traj.states), len(self.traj.V_N))
+        self._require_bound_entry()
+        T_limit = min(self.T_sim, len(self.traj.states), len(self.traj.V_N))
         
         states = np.asarray(self.traj.states[:T_limit], dtype=float)
         V_N = np.asarray(self.traj.V_N[:T_limit], dtype=float)

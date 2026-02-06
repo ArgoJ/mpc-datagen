@@ -1,6 +1,8 @@
 import numpy as np
 import os
 import plotly.graph_objects as go
+
+from numpy.typing import NDArray
 from plotly.subplots import make_subplots
 from collections.abc import Callable
 
@@ -16,7 +18,7 @@ COLORS = [
 ]
 
 
-def _order_boundary_points_xy(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+def _order_boundary_points_xy(x: NDArray, y: NDArray) -> NDArray:
     """Order 2D boundary points by polar angle around centroid.
 
     This is useful when `bounds` is an unordered point cloud on a closed curve.
@@ -33,7 +35,7 @@ def _order_boundary_points_xy(x: np.ndarray, y: np.ndarray) -> np.ndarray:
     angles = np.arctan2(y - cy, x - cx)
     return np.argsort(angles)
 
-def _plotly_multiline(x: np.ndarray, axis: int=0):
+def _plotly_multiline(x: NDArray, axis: int=0):
     if axis == 0:
         return np.hstack([x, np.full((x.shape[0], 1), np.nan)]).flatten()
     elif axis == 1:
@@ -239,7 +241,7 @@ def mpc_trajectories(
 
 def lyapunov(
     dataset: MPCDataset,
-    lyapunov_func: Callable[[np.ndarray], np.ndarray],
+    lyapunov_func: Callable[[NDArray], NDArray],
     state_indices: list[int] = [0, 1],
     state_labels: list[str] | None = None,
     limits: list[tuple[float, float]] | None = None,
@@ -255,7 +257,7 @@ def lyapunov(
     ----------
     dataset : MPCDataset
         The dataset containing trajectories to plot.
-    lyapunov_func : Callable[[np.ndarray], np.ndarray]
+    lyapunov_func : Callable[[NDArray], NDArray]
         A function that takes a state vector and returns the Lyapunov value.
     state_indices : list[int], optional
         Indices of the two state variables to plot (x, y axes). Default is [0, 1].
@@ -637,9 +639,9 @@ def cost_descent(
         fig.show()
 
 def roa(
-    lyapunov_func: Callable[[np.ndarray], np.ndarray],
+    lyapunov_func: Callable[[NDArray], NDArray],
     c_level: float,
-    bounds: np.ndarray,  # shape (n_points, nx)
+    bounds: NDArray,  # shape (n_points, nx)
     state_indices: list[int] = [0, 1],
     state_labels: list[str] | None = None,
     limits: list[tuple[float, float]] | None = None,

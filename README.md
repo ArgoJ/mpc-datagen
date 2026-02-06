@@ -1,14 +1,13 @@
 # mpc-datagen
 
-Generate datasets from Model Predictive Control (MPC) runs, with optional stability verification for linear-quadratic MPC setups. This package targets workflows such as imitation learning, controller benchmarking, and reproducible MPC data collection using acados.
+Generate datasets from Model Predictive Control (MPC) runs, with optional stability verification for linear-quadratic MPC setups. This package targets workflows such as imitation learning and reproducible MPC data collection using acados.
 
 ## What you can do
 
 - **Generate closed-loop MPC rollouts** from an acados OCP solver.
 - **Extract MPC configuration and linearized system data** from an acados solver instance.
 - **Store trajectories and metadata** in structured containers for downstream learning or analysis.
-- **Verify stability properties** (e.g., Grüne-type certificates and terminal-ingredient checks) for linear MPC setups.
-- **Log progress cleanly** with tqdm-friendly logging utilities.
+- **Verify empirical stability properties** for linear MPC setups.
 
 ## Package layout
 
@@ -16,7 +15,7 @@ Generate datasets from Model Predictive Control (MPC) runs, with optional stabil
 	- Core data models: MPCData, MPCDataset, MPCConfig, MPCTrajectory
 	- Extraction utilities: MPCConfigExtractor, LinearSystemExtractor
 	- Generation: MPCDataGenerator, solve_mpc_closed_loop
-	- Verification: StabilityVerifier, StabilityCertifier, reports, rendering
+	- Verification: StabilityVerifier, ROAVerifier
 
 ## Installation
 
@@ -32,10 +31,14 @@ from mpc_datagen import MPCDataGenerator
 
 # solver: AcadosOcpSolver created elsewhere
 samples = 10000
-x0_bounds = np.array([])
+x0_bounds = np.array([...])     # [[lbx0_0, lbx1_0, ...], [ubx0_0, ubx1_0, ...]]
 T_sim = 50
 gen = MPCDataGenerator(solver, x0_bounds, T_sim)
 data = gen.generate(samples)
+
+# for some information on e.g. feasibility
+data.validate()                 
+data.save("your/path/to/file.h5py")
 ```
 
 ## Dataset datastructure

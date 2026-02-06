@@ -4,6 +4,8 @@
 
 # %% General Imports
 import numpy as np
+
+from numpy.typing import NDArray
 from scipy.linalg import solve_discrete_are, block_diag
 from casadi import SX
 from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
@@ -20,14 +22,14 @@ from mpc_datagen.verification import (
 
 
 # %% Model Definition
-def get_model(A: np.ndarray, B: np.ndarray) -> AcadosModel:
+def get_model(A: NDArray, B: NDArray) -> AcadosModel:
     """Create and return an `AcadosModel` for the linear system.
     
     Parameters
     ----------
-    A : np.ndarray
+    A : NDArray
         State matrix of the discrete-time double integrator.
-    B : np.ndarray
+    B : NDArray
         Input matrix of the discrete-time double integrator.
 
     Returns
@@ -62,11 +64,11 @@ def get_model(A: np.ndarray, B: np.ndarray) -> AcadosModel:
 
 # %% OCP Solver Definition
 def get_ocp_solver(
-    A_c: np.ndarray, 
-    B_c: np.ndarray, 
-    Q: np.ndarray, 
-    R: np.ndarray,
-    P: np.ndarray | None = None,
+    A_c: NDArray, 
+    B_c: NDArray, 
+    Q: NDArray, 
+    R: NDArray,
+    P: NDArray | None = None,
     dt: float = 0.1, 
     N: int = 20,
     tol: float = 1e-8,
@@ -78,11 +80,11 @@ def get_ocp_solver(
 
     Parameters
     ----------
-    A_c, B_c : np.ndarray
+    A_c, B_c : NDArray
         Continuous system matrices (dot(x) = Ax + Bu).
-    Q, R : np.ndarray
+    Q, R : NDArray
         Stage cost matrices (x'Qx + u'Ru).
-    P : np.ndarray, optional
+    P : NDArray, optional
         Terminal cost matrix (x_N' P x_N). If None, calculated via DARE on discretized system.
     dt : float
         Sampling time in seconds.
@@ -197,7 +199,7 @@ if __name__ == "__main__":
         name: str,
         terminal_mode: str,
         N: int,
-        x0_bounds: np.ndarray,
+        x0_bounds: NDArray,
         T_sim: int = 30,
         n_samples: int = 10,
         bounds_scale: float = 10.0,
@@ -223,9 +225,9 @@ if __name__ == "__main__":
             solver=solver,
             x0_bounds=x0_bounds,
             T_sim=T_sim,
-            verbose=True,
             reset_solver=True,
-            break_on=BreakOn.INFEASIBLE,
+            break_on=BreakOn.ALL,
+            xeps_cfg=EpsBandConfig(eps_band=np.array([0.2, 1e-2]), eps_consecutive=3)
         )
         dataset = generator.generate(n_samples=n_samples)
         dataset.validate()

@@ -1,10 +1,12 @@
 import numpy as np
 
+from numpy.typing import NDArray
 from acados_template import AcadosOcpSolver
 from tqdm import tqdm
 from dataclasses import replace
+from typing import Literal
 
-from .mpc_solve import solve_mpc_closed_loop, BreakOn
+from .mpc_solve import solve_mpc_closed_loop, BreakOn, EpsBandConfig
 from ..extractor import MPCConfigExtractor
 from ..mpc_data import MPCDataset
 from ..package_logger import PackageLogger, DEFAULT_MODULE_NAME
@@ -16,12 +18,12 @@ class MPCDataGenerator:
     def __init__(
         self,
         solver: AcadosOcpSolver,
-        x0_bounds: np.ndarray,
+        x0_bounds: NDArray,
         T_sim: int,
         break_on: BreakOn = BreakOn.INFEASIBLE,
+        xeps_cfg: EpsBandConfig | None = None,
         seed: int | None = None,
-        verbose: bool = True,
-        bound_type: str = "absolute",
+        bound_type: Literal["absolute", "percentage"] = "absolute",
         reset_solver: bool = False,
     ):
         """
@@ -31,7 +33,7 @@ class MPCDataGenerator:
         ----------
         solver : AcadosOcpSolver
             The initialized Acados OCP solver instance.
-        x0_bounds : np.ndarray
+        x0_bounds : NDArray
             Bounds for initial state sampling (shape: (2, nx)) (lower_bounds, upper_bounds).
             In 'percentage' mode this is the single (shape: (nx,))  percentage array (0-1) used to shrink the solver's
             state bounds toward their midpoint.
@@ -39,40 +41,35 @@ class MPCDataGenerator:
             Number of simulation steps per trajectory.
         break_on : BreakOn
             Condition to stop simulation if the solver fails.
+        xeps_cfg : EpsBandConfig, optional
+            Configuration for epsilon band checks used when `break_on` is `BreakOn.IN_EPS` or `BreakOn.ALL`.
         seed : int, optional
             Random seed for reproducibility.
-        verbose : bool
-            If True, prints progress.
-        bound_type : str
+        bound_type : Literal["absolute", "percentage"]
             Type of bounds: 'absolute' (default) or 'percentage'.
             'percentage' shrinks the solver's lbx/ubx around the midpoint with a single percentage array.
         reset_solver : bool
             If True, resets the solver states to zero before each simulation.
         """
+        if seed is not None:
+            np.random.seed(seed)
+        
         self.solver = solver
         self.break_on = break_on
-        self.verbose = verbose
+        self.xeps_cfg = xeps_cfg
         self.reset_solver = reset_solver
-        self.bound_type = bound_type
-        self.x0_bounds = x0_bounds
-        self.T_sim = T_sim
-        
         self.mpc_config = MPCConfigExtractor.get_cfg(self.solver)
         self.mpc_config.T_sim = T_sim
         
         self.sample_lb = None
         self.sample_ub = None
+        self.calc_sample_bounds(bound_type, x0_bounds)
         
-        if seed is not None:
-            np.random.seed(seed)
-            
-        self.calc_sample_bounds()
-        
-    def calc_sample_bounds(self) -> None:
+    def calc_sample_bounds(self, bound_type: str, x0_bounds: NDArray) -> None:
         nx = self.mpc_config.nx
         
-        if self.bound_type == "percentage":
-            percentages = self.x0_bounds
+        if bound_type == "percentage":
+            percentages = x0_bounds
 
             # Basic validation
             if percentages.shape[0] != nx:
@@ -85,13 +82,13 @@ class MPCDataGenerator:
 
             self.sample_lb, self.sample_ub = self._calculate_percentage_bounds(
                 self.mpc_config.constraints.lbx, self.mpc_config.constraints.ubx, percentages)
-        elif self.bound_type == "absolute":
-            if self.x0_bounds.shape != (2, nx):
-                raise ValueError(f"Bounds must have shape (2, {nx}) for absolute mode. Got {self.x0_bounds.shape}.")
-            self.sample_lb = self.x0_bounds[0]
-            self.sample_ub = self.x0_bounds[1]
+        elif bound_type == "absolute":
+            if x0_bounds.shape != (2, nx):
+                raise ValueError(f"Bounds must have shape (2, {nx}) for absolute mode. Got {x0_bounds.shape}.")
+            self.sample_lb = x0_bounds[0]
+            self.sample_ub = x0_bounds[1]
         else:
-            raise ValueError(f"Unknown bound_type: {self.bound_type}. Use 'absolute' or 'percentage'.")
+            raise ValueError(f"Unknown bound_type: {bound_type}. Use 'absolute' or 'percentage'.")
         
             
     def generate(self, n_samples: int) -> MPCDataset:
@@ -105,23 +102,16 @@ class MPCDataGenerator:
 
         Returns
         -------
-        MPCDataset
+        dataset : MPCDataset
             A dataset containing the generated trajectories.
         """
         dataset = MPCDataset()
         
-        # Configure Tqdm handler for logging if verbose is enabled
-        tqdm_handler = None
         restored_handlers = []
-        if self.verbose:
-            tqdm_handler, restored_handlers = PackageLogger.add_tqdm_handler()
-        
-        iterator = range(n_samples)
-        if self.verbose:
-            iterator = tqdm(iterator, desc="Generating Trajectories")
+        tqdm_handler, restored_handlers = PackageLogger.add_tqdm_handler()
 
         try:
-            for _ in iterator:
+            for _ in tqdm(range(n_samples), desc="Generating Trajectories"):
                 x0 = np.random.uniform(self.sample_lb, self.sample_ub)
                 temp_cfg = replace(
                     self.mpc_config, 
@@ -130,11 +120,11 @@ class MPCDataGenerator:
                 if self.reset_solver:
                     self.solver.reset()
 
-                # TODO: add an epsilon band around the x_target
                 mpc_data = solve_mpc_closed_loop(
                     solver=self.solver,
                     cfg=temp_cfg,
-                    break_on=self.break_on
+                    break_on=self.break_on,
+                    xeps_cfg=self.xeps_cfg,
                 )
 
                 dataset.add(mpc_data)
@@ -145,7 +135,7 @@ class MPCDataGenerator:
         return dataset
 
     @staticmethod
-    def _calculate_percentage_bounds(lbx: np.ndarray, ubx: np.ndarray, percentages: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    def _calculate_percentage_bounds(lbx: NDArray, ubx: NDArray, percentages: NDArray) -> tuple[NDArray, NDArray]:
         """Shrink bounds symmetrically around the midpoint using the provided percentages"""
         mid = 0.5 * (lbx + ubx)
         half_range = 0.5 * (ubx - lbx)

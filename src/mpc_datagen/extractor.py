@@ -1,5 +1,6 @@
 import numpy as np
 
+from numpy.typing import NDArray
 from typing import Any, Literal
 from acados_template import AcadosOcpSolver
 
@@ -28,10 +29,10 @@ def _is_none(*values: Any) -> Any:
 
 # --- Extracts ---
 def extract_stage_reference(
-    yref: np.ndarray | None,
+    yref: NDArray | None,
     nx: int, 
     nu: int
-) -> tuple[np.ndarray, np.ndarray] | None:
+) -> tuple[NDArray, NDArray] | None:
     """Extraction of (x*, u*) from yref."""
     if _is_none(yref, nx, nu):
         return None
@@ -51,7 +52,7 @@ def extract_stage_reference(
     return x_ref, u_ref
 
 
-def extract_terminal_reference(yref_e: np.ndarray | None, nx: int) -> np.ndarray | None:
+def extract_terminal_reference(yref_e: NDArray | None, nx: int) -> NDArray | None:
     """Extraction of x_e* from yref_e."""
     if _is_none(yref_e, nx):
         return None
@@ -67,11 +68,11 @@ def extract_terminal_reference(yref_e: np.ndarray | None, nx: int) -> np.ndarray
 
 
 def indexed_bounds(
-    lb: np.ndarray | None,
-    ub: np.ndarray | None,
-    idx: np.ndarray | None,
+    lb: NDArray | None,
+    ub: NDArray | None,
+    idx: NDArray | None,
     dim: int,
-) -> tuple[np.ndarray, np.ndarray] | None:
+) -> tuple[NDArray, NDArray] | None:
     """Reconstruct full bounds vectors from acados indexed bounds."""
     if _is_none(lb, ub, idx):
         return None
@@ -99,10 +100,10 @@ def indexed_bounds(
     return full_lb, full_ub
 
 def extract_QR(
-    W: np.ndarray, 
-    Vx: np.ndarray, 
-    Vu: np.ndarray
-) -> tuple[np.ndarray, np.ndarray] | None:
+    W: NDArray, 
+    Vx: NDArray, 
+    Vu: NDArray
+) -> tuple[NDArray, NDArray] | None:
     """Extracts Q, R from the cost configuration."""
     if _is_none(W, Vx, Vu):
         return None
@@ -117,9 +118,9 @@ def extract_QR(
     return Q, R
 
 def extract_Qf(
-    W_e: np.ndarray,
-    Vx_e: np.ndarray
-) -> np.ndarray | None:
+    W_e: NDArray,
+    Vx_e: NDArray
+) -> NDArray | None:
     """Extracts Qf from the terminal cost configuration."""
     if _is_none(W_e, Vx_e):
         return None
@@ -230,7 +231,7 @@ class MPCConfigExtractor():
         x_lin, u_lin = self._extract_x_and_u_lin()
         self.cfg.model = self._extract_discretized_dynamics(x_lin, u_lin, self.cfg.dt)
 
-    def _extract_x_and_u_lin(self) -> tuple[np.ndarray, np.ndarray]:
+    def _extract_x_and_u_lin(self) -> tuple[NDArray, NDArray]:
         """Get linearization points for state and input."""
         if self.cfg.cost.yref.shape[0] != (self.cfg.nx + self.cfg.nu):
             raise ValueError(
@@ -248,21 +249,21 @@ class MPCConfigExtractor():
 
         return x_lin, u_lin
 
-    def _extract_discretized_dynamics(self, x_lin: np.ndarray, u_lin: np.ndarray, dt: float) -> LinearSystem:
+    def _extract_discretized_dynamics(self, x_lin: NDArray, u_lin: NDArray, dt: float) -> LinearSystem:
         """Compute the discrete-time linearization (A, B, g).
         
         Parameters
         ----------
-        x_lin, u_lin : np.ndarray
+        x_lin, u_lin : NDArray
             Linearization points for state and input.
         dt : float
             Sampling time.
 
         Returns
         -------
-        Ad, Bd : np.ndarray
+        Ad, Bd : NDArray
             Discrete-time state and input matrices.
-        gd : np.ndarray
+        gd : NDArray
             Affine offset term so that $x^+ \\approx Ad x + Bd u + gd$.
         """
         if self.ocp.solver_options.integrator_type != "ERK" or self.ocp.model.f_expl_expr is None:

@@ -3,6 +3,7 @@ import h5py
 import numpy as np
 import pandas as pd
 
+from numpy.typing import NDArray
 from dataclasses import dataclass, field, asdict
 from collections.abc import Iterator
 from pathlib import Path
@@ -12,7 +13,7 @@ from .package_logger import PackageLogger
 
 __logger__ = PackageLogger.get_logger(__name__)
 
-def _is_defined_array(arr: np.ndarray | None, not_zero: bool = True) -> bool:
+def _is_defined_array(arr: NDArray | None, not_zero: bool = True) -> bool:
     """Check if an array is defined and non-empty."""
     if arr is None:
         return False
@@ -23,7 +24,7 @@ def _is_defined_array(arr: np.ndarray | None, not_zero: bool = True) -> bool:
         return False
     return True 
 
-def _arrays_equal(a: np.ndarray | None, b: np.ndarray | None) -> bool:
+def _arrays_equal(a: NDArray | None, b: NDArray | None) -> bool:
     """Robust array equality check for config comparisons."""
     if a is None or b is None:
         return False
@@ -36,7 +37,7 @@ def _arrays_equal(a: np.ndarray | None, b: np.ndarray | None) -> bool:
     return np.array_equal(a_arr, b_arr)
 
 def _values_equal(a, b) -> bool:
-    if isinstance(a, np.ndarray) or isinstance(b, np.ndarray):
+    if isinstance(a, NDArray) or isinstance(b, NDArray):
         return _arrays_equal(a, b)
     if isinstance(a, (float, np.floating)) or isinstance(b, (float, np.floating)):
         return bool(np.isclose(a, b))
@@ -68,9 +69,9 @@ class MPCMeta:
 @dataclass
 class LinearSystem:
     """Linearized system matrices."""
-    A: np.ndarray = field(default_factory=lambda: np.array([[]]))
-    B: np.ndarray = field(default_factory=lambda: np.array([[]]))
-    gd: np.ndarray = field(default_factory=lambda: np.array([[]]))
+    A: NDArray = field(default_factory=lambda: np.array([[]]))
+    B: NDArray = field(default_factory=lambda: np.array([[]]))
+    gd: NDArray = field(default_factory=lambda: np.array([[]]))
 
     @classmethod
     def from_hdf5(cls, grp: h5py.Group) -> "LinearSystem":
@@ -112,20 +113,20 @@ class LinearLSCost:
 
     Attributes
     ----------
-    Vx : np.ndarray
+    Vx : NDArray
         Output matrix for the state $x$ in the stage cost. Shape: (ny, nx).
-    Vu : np.ndarray
+    Vu : NDArray
         Output matrix for the input $u$ in the stage cost. Shape: (ny, nu).
-    W : np.ndarray
+    W : NDArray
         Weighting matrix for the stage cost. Shape: (ny, ny).
         Should be symmetric and positive (semi-)definite.
-    yref : np.ndarray
+    yref : NDArray
         Reference signal for the stage outputs. Shape: (ny,).
-    Vx_e : np.ndarray
+    Vx_e : NDArray
         Output matrix for the state $x$ in the terminal cost. Shape: (ny_e, nx).
-    W_e : np.ndarray
+    W_e : NDArray
         Weighting matrix for the terminal cost. Shape: (ny_e, ny_e).
-    yref_e : np.ndarray
+    yref_e : NDArray
         Reference signal for the terminal outputs. Shape: (ny_e,).
     stage_scale : float
         Scaling factor applied to the stage cost term (default: 1.0).
@@ -133,20 +134,27 @@ class LinearLSCost:
     terminal_scale : float
         Scaling factor applied to the terminal cost term (default: 1.0).
     """
-    Vx: np.ndarray = field(default_factory=lambda: np.array([[]]))
-    Vu: np.ndarray = field(default_factory=lambda: np.array([[]]))
-    W: np.ndarray = field(default_factory=lambda: np.array([[]]))
-    yref: np.ndarray = field(default_factory=lambda: np.array([[]]))
-    Vx_e: np.ndarray = field(default_factory=lambda: np.array([[]]))
-    W_e: np.ndarray = field(default_factory=lambda: np.array([[]]))
-    yref_e: np.ndarray = field(default_factory=lambda: np.array([[]]))
+    Vx: NDArray = field(default_factory=lambda: np.array([[]]))
+    Vu: NDArray = field(default_factory=lambda: np.array([[]]))
+    W: NDArray = field(default_factory=lambda: np.array([[]]))
+    yref: NDArray = field(default_factory=lambda: np.array([[]]))
+    Vx_e: NDArray = field(default_factory=lambda: np.array([[]]))
+    W_e: NDArray = field(default_factory=lambda: np.array([[]]))
+    yref_e: NDArray = field(default_factory=lambda: np.array([[]]))
     stage_scale: float = 1.0
     terminal_scale: float = 1.0
 
-    def get_stage_cost(self, x: np.ndarray, u: np.ndarray, use_scaled: bool = False) -> float | np.ndarray:
+    def get_y(self, x: NDArray, u: NDArray) -> NDArray:
+        """Compute the stage output y = Vx x + Vu u."""
+        return x @ self.Vx.T + u @ self.Vu.T
+
+    def get_y_e(self, x: NDArray) -> NDArray:
+        """Compute the stage output y_e = Vx_e x."""
+        return x @ self.Vx_e.T
+
+    def get_stage_cost(self, x: NDArray, u: NDArray, use_scaled: bool = False) -> float | NDArray:
         """Compute the cost for a given output vector y. Supports vectorized inputs."""
-        # Note: x @ Vx.T handles both (nx,) and (N, nx) inputs correctly via broadcasting/matrix-mul rules
-        y = x @ self.Vx.T + u @ self.Vu.T
+        y = self.get_y(x, u)
         e = y - self.yref
         
         scale = 0.5
@@ -158,11 +166,11 @@ class LinearLSCost:
             return scale * float(norm)
         return scale * norm
     
-    def get_terminal_cost(self, x: np.ndarray, use_scaled: bool = False) -> float | np.ndarray:
+    def get_terminal_cost(self, x: NDArray, use_scaled: bool = False) -> float | NDArray:
         """Compute the terminal cost for a given output vector y. Supports vectorized inputs."""
         if not self.has_terminal_cost():
             return 0.0
-        y = x @ self.Vx_e.T
+        y = self.get_y_e(x)
         e = y - self.yref_e
         
         scale = 0.5
@@ -229,34 +237,34 @@ class Constraints:
 
     Attributes
     ----------
-    x0 : np.ndarray
+    x0 : NDArray
         Initial state vector $x_0 \in \mathbb{R}^{n_x}$.
-    lbx : np.ndarray
+    lbx : NDArray
         Lower bounds on the state vector $\underline{x}$ (stage constraints).
         Shape: (nx,). Condition: $x_k \ge \underline{x}$ for $k=0 \dots N-1$.
-    ubx : np.ndarray
+    ubx : NDArray
         Upper bounds on the state vector $\overline{x}$ (stage constraints).
         Shape: (nx,). Condition: $x_k \le \overline{x}$ for $k=0 \dots N-1$.
-    lbu : np.ndarray
+    lbu : NDArray
         Lower bounds on the input vector $\underline{u}$.
         Shape: (nu,). Condition: $u_k \ge \underline{u}$ for $k=0 \dots N-1$.
-    ubu : np.ndarray
+    ubu : NDArray
         Upper bounds on the input vector $\overline{u}$.
         Shape: (nu,). Condition: $u_k \le \overline{u}$ for $k=0 \dots N-1$.
-    lbx_e : np.ndarray
+    lbx_e : NDArray
         Lower bounds on the terminal state vector $\underline{x}_f$.
         Shape: (nx,). Condition: $x_N \ge \underline{x}_f$.
-    ubx_e : np.ndarray
+    ubx_e : NDArray
         Upper bounds on the terminal state vector $\overline{x}_f$.
         Shape: (nx,). Condition: $x_N \le \overline{x}_f$.
     """
-    x0: np.ndarray = field(default_factory=lambda: np.array([]))
-    lbx: np.ndarray = field(default_factory=lambda: np.array([]))
-    ubx: np.ndarray = field(default_factory=lambda: np.array([]))
-    lbu: np.ndarray = field(default_factory=lambda: np.array([]))
-    ubu: np.ndarray = field(default_factory=lambda: np.array([]))
-    lbx_e: np.ndarray = field(default_factory=lambda: np.array([]))
-    ubx_e: np.ndarray = field(default_factory=lambda: np.array([]))
+    x0: NDArray = field(default_factory=lambda: np.array([]))
+    lbx: NDArray = field(default_factory=lambda: np.array([]))
+    ubx: NDArray = field(default_factory=lambda: np.array([]))
+    lbu: NDArray = field(default_factory=lambda: np.array([]))
+    ubu: NDArray = field(default_factory=lambda: np.array([]))
+    lbx_e: NDArray = field(default_factory=lambda: np.array([]))
+    ubx_e: NDArray = field(default_factory=lambda: np.array([]))
 
     def has_bx(self) -> bool:
         """Check if state bounds are defined."""
@@ -270,19 +278,19 @@ class Constraints:
         """Check if input bounds are defined."""
         return _is_defined_array(self.lbu) and _is_defined_array(self.ubu)
 
-    def is_inside_bx(self, x: np.ndarray) -> bool:
+    def is_inside_bx(self, x: NDArray) -> bool:
         """Check if a state is inside the defined state bounds."""
         if not self.has_bx():
             return True
         return np.all(x >= self.lbx) and np.all(x <= self.ubx)
 
-    def is_inside_bx_e(self, x: np.ndarray) -> bool:
+    def is_inside_bx_e(self, x: NDArray) -> bool:
         """Check if a state is inside the defined terminal state bounds."""
         if not self.has_bx_e():
             return True
         return np.all(x >= self.lbx_e) and np.all(x <= self.ubx_e)
 
-    def is_inside_bu(self, u: np.ndarray) -> bool:
+    def is_inside_bu(self, u: NDArray) -> bool:
         """Check if an input is inside the defined input bounds."""
         if not self.has_bu():
             return True
@@ -497,21 +505,21 @@ class MPCTrajectory:
 
     Attributes
     ----------
-    states : np.ndarray
+    states : NDArray
         Closed-loop state trajectory history. Shape: (T_sim + 1, nx).
-    inputs : np.ndarray
+    inputs : NDArray
         Closed-loop input trajectory history. Shape: (T_sim, nu).
-    times : np.ndarray
+    times : NDArray
         Simulation timestamps. Shape: (T_sim + 1,).
-    V_solver : np.ndarray
+    V_solver : NDArray
         Raw objective values returned by the solver (potentially scaled). Shape: (T_sim,).
-    V_N : np.ndarray, optional
+    V_N : NDArray, optional
         Re-calculated Optimal Value Function V_N(x) (Lyapunov candidate). Shape: (T_sim,).
-    V_horizon : np.ndarray, optional
+    V_horizon : NDArray, optional
         Sequence of stage costs along the prediction horizon. Shape: (T_sim, N+1).
-    predicted_states : np.ndarray, optional
+    predicted_states : NDArray, optional
         Predicted open-loop state trajectories at each step. Shape: (T_sim, N+1, nx).
-    predicted_inputs : np.ndarray, optional
+    predicted_inputs : NDArray, optional
         Predicted open-loop input trajectories at each step. Shape: (T_sim, N, nu).
     feasible : bool
         Flag indicating if the OCP was feasible throughout the trajectory. Default: True.
@@ -524,14 +532,14 @@ class MPCTrajectory:
         Get the prediction horizon length (if available).
     """
 
-    states: np.ndarray
-    inputs: np.ndarray
-    times: np.ndarray
-    V_solver: np.ndarray
-    V_N: np.ndarray | None = None
-    V_horizon: np.ndarray | None = None
-    predicted_states: np.ndarray | None = None
-    predicted_inputs: np.ndarray | None = None
+    states: NDArray
+    inputs: NDArray
+    times: NDArray
+    V_solver: NDArray
+    V_N: NDArray | None = None
+    V_horizon: NDArray | None = None
+    predicted_states: NDArray | None = None
+    predicted_inputs: NDArray | None = None
     feasible: bool = True
     
     @property
@@ -551,13 +559,13 @@ class MPCTrajectory:
         return None
 
     @property
-    def V_pred(self) -> np.ndarray:
+    def V_pred(self) -> NDArray:
         """The cost-to-go for each trajectory at each step. (shape: (T_sim, N+1))"""
         if self.V_horizon is None:
             raise ValueError("No horizon costs available to calculate cost-to-go. Call 'recalculate_costs()' first.")
         return np.flip(np.cumsum(np.flip(self.V_horizon, axis=1), axis=1), axis=1)
     
-    def get_scaled_costs(self, stage_scale: float, terminal_scale: float = 1.0) -> np.ndarray:
+    def get_scaled_costs(self, stage_scale: float, terminal_scale: float = 1.0) -> NDArray:
         """
         Calculate scaled costs for each trajectory.
         
@@ -568,7 +576,7 @@ class MPCTrajectory:
 
         Returns
         -------
-        scaled_costs : np.ndarray
+        scaled_costs : NDArray
             The scaled total costs for each trajectory. (shape: (T_sim,))
         """
         if self.V_horizon is None:
@@ -728,9 +736,49 @@ class MPCData:
     meta: MPCMeta = field(default_factory=MPCMeta)
     config: MPCConfig = field(default_factory=MPCConfig)
 
-    def finalize(self, recalculate_costs: bool = False) -> bool:
-        """Finalizes the data entry, checking consistency and optionally recalculating costs."""
-        T_sim = self.config.T_sim
+    def finalize(self, recalculate_costs: bool = False, truncate: bool = False) -> bool:
+        """Finalizes the data entry.
+
+        Parameters
+        ----------
+        recalculate_costs : bool
+            Recalculate costs from stored predicted trajectories.
+        truncate : bool
+            If True, truncate stored arrays/status codes to the effective simulated length.
+            The effective length is inferred from `meta.status_codes` (preferred) or
+            `meta.steps_simulated`.
+        """
+        if self.meta is None and truncate:
+            __logger__.warning(f"Meta information is missing. Cannot determine effective simulation length for truncation.")
+            truncate = False
+
+        if truncate and int(getattr(self.meta, "steps_simulated", 0)) > 0:
+            T_eff = int(self.meta.steps_simulated)
+            self.config.T_sim = T_eff
+            traj = self.trajectory
+
+            # Truncate arrays (only if larger than expected).
+            if traj.states.shape[0] > T_eff + 1:
+                traj.states = traj.states[: T_eff + 1, :]
+            if traj.inputs.shape[0] > T_eff:
+                traj.inputs = traj.inputs[:T_eff, :]
+            if traj.times.shape[0] > T_eff + 1:
+                traj.times = traj.times[: T_eff + 1]
+            if traj.V_solver.shape[0] > T_eff:
+                traj.V_solver = traj.V_solver[:T_eff]
+
+            if traj.predicted_states is not None and traj.predicted_states.shape[0] > T_eff:
+                traj.predicted_states = traj.predicted_states[:T_eff, :, :]
+            if traj.predicted_inputs is not None and traj.predicted_inputs.shape[0] > T_eff:
+                traj.predicted_inputs = traj.predicted_inputs[:T_eff, :, :]
+            if traj.V_N is not None and traj.V_N.shape[0] > T_eff:
+                traj.V_N = traj.V_N[:T_eff]
+            if traj.V_horizon is not None and traj.V_horizon.shape[0] > T_eff:
+                traj.V_horizon = traj.V_horizon[:T_eff, :]
+
+            __logger__.debug(f"Truncated trajectory arrays to effective length T_eff={T_eff}.")
+
+        T_sim = int(self.config.T_sim)
         traj = self.trajectory
         nx = traj.states.shape[1]
         nu = traj.inputs.shape[1]
@@ -771,6 +819,8 @@ class MPCData:
             scaled_costs = traj.get_scaled_costs(stage_scale=self.config.cost.stage_scale, terminal_scale=self.config.cost.terminal_scale)
             if not np.allclose(scaled_costs, traj.V_solver, rtol=1e-3, atol=1e-6, equal_nan=True):
                 __logger__.warning(f"Recalculated scaled costs do not match stored costs.")
+
+        return True
 
     def is_feasible(self) -> bool:
         """Check if the trajectory is feasible."""
@@ -1047,9 +1097,9 @@ class MPCDataset:
     
     def validate(
         self,
-        x_bounds: np.ndarray | None = None,
-        u_bounds: np.ndarray | None = None,
-        x_ref: np.ndarray | None = None,
+        x_bounds: NDArray | None = None,
+        u_bounds: NDArray | None = None,
+        x_ref: NDArray | None = None,
         tol_constraints: float = 1e-4,
         tol_stability: float = 1e-2
     ) -> pd.DataFrame:
