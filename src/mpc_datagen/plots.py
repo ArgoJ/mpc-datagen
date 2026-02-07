@@ -319,6 +319,9 @@ def lyapunov(
         state_labels = [f"State {idx_x}", f"State {idx_y}"]
     if len(state_labels) != 2:
         raise ValueError("state_labels must contain exactly 2 labels.")
+    
+    title_v = "V<sub>N</sub>" if use_optimal_v else "V<sub>horizon</sub>"
+    title = f"Lyapunov Landscape ({title_v}) - States {state_labels[0]} vs {state_labels[1]}"
 
     # Determine limits if not provided
     if limits is None:
@@ -398,7 +401,7 @@ def lyapunov(
                 y = traj.states[:-1, idx_y].flatten()
 
             if v_traj.shape != x.shape or v_traj.shape != y.shape:
-                __logger__.warning(
+                __logger__.debug(
                     f"Trajectory {idx+1} cost shape {v_traj.shape} does not match state shape {x.shape}; skipping."
                 )
                 continue
@@ -431,7 +434,7 @@ def lyapunov(
     # Layout Configuration
     if plot_3d:
         fig.update_layout(
-            title_text=f"Lyapunov Landscape 3D ({state_labels[0]} vs {state_labels[1]})",
+            title_text=title,
             scene=dict(
                 xaxis_title=state_labels[0],
                 yaxis_title=state_labels[1],
@@ -443,7 +446,7 @@ def lyapunov(
         )
     else:
         fig.update_layout(
-            title_text=f"Lyapunov Landscape ({state_labels[0]} vs {state_labels[1]})",
+            title_text=title,
             xaxis_title=state_labels[0],
             yaxis_title=state_labels[1],
             yaxis=dict(
@@ -485,25 +488,30 @@ def lyapunov(
 
 def relaxed_dp_residual(
     dataset: MPCDataset,
+    alpha: float = 1.0,
     html_path: str | None = None
 ) -> None:
     """Plot Lyapunov-style one-step descent check.
 
     For each trajectory entry, plots
 
-    $$s_n = V_N(x_{n+1}) - V_N(x_n) + \ell(x_n, u_n)$$
+    $$s_n(\alpha) = V_N(x_{n+1}) - V_N(x_n) + \alpha\,\ell(x_n, u_n)$$
 
     where $V_N$ is the MPC cost-to-go at time step $n$ (taken from the stored
     per-step value function / objective), and $\ell(x_n,u_n)$ is the *single*
     stage cost at time step $n$ along the closed-loop trajectory.
 
     Visual interpretation: values above 0 violate the one-step descent
-    inequality $V_N(x_{n+1}) - V_N(x_n) \le -\ell(x_n,u_n)$.
+    inequality $V_N(x_{n+1}) - V_N(x_n) \le -\alpha\,\ell(x_n,u_n)$.
 
     Parameters
     ----------
     dataset : MPCDataset
         The dataset containing trajectories to plot.
+    alpha : float, optional
+        The relaxation factor in the descent inequality. Use `alpha=1.0` to
+        visualize the strict DP inequality, or a smaller `alpha` to match an
+        empirically verified decay rate.
     html_path : str, optional
         If provided, saves the plot to the specified HTML file.
     """
@@ -521,7 +529,7 @@ def relaxed_dp_residual(
         id = entry.meta.id
 
         if traj.V_N is None:
-            __logger__.warning(f"Entry {id} missing V_N; skipping.")
+            __logger__.debug(f"Entry {id} missing V_N; skipping.")
             continue
 
         # Ensure consistent lengths across V_N, states, and inputs.
@@ -531,7 +539,7 @@ def relaxed_dp_residual(
             int(traj.states.shape[0] - 1),
         )
         if num_steps <= 0:
-            __logger__.warning(f"Entry {id} has insufficient steps; skipping.")
+            __logger__.debug(f"Entry {id} has insufficient steps; skipping.")
             continue
 
         x = traj.states[:num_steps]
@@ -540,10 +548,11 @@ def relaxed_dp_residual(
         V_curr = np.asarray(traj.V_N[:num_steps], dtype=float).reshape(-1)
         V_next = np.asarray(traj.V_N[1 : num_steps + 1], dtype=float).reshape(-1)
 
-        deltas = V_next - V_curr + l_n
+        deltas = V_next - V_curr + float(alpha) * l_n
         per_entry.append((id, deltas))
 
     n_lines = len(per_entry)
+    max_len = max((int(d.shape[0]) for _, d in per_entry), default=0)
 
     if n_lines > SUMMARY_LINE_THRESHOLD:
         __logger__.info(
@@ -617,7 +626,7 @@ def relaxed_dp_residual(
 
     fig.add_trace(
         go.Scatter(
-            x=[0, 1],
+            x=[0, max(1, max_len - 1)],
             y=[0, 0],
             mode='lines',
             line=dict(color='black', width=1, dash='dash'),
@@ -629,10 +638,10 @@ def relaxed_dp_residual(
     fig.update_layout(
         title_text=(
             "Relaxed DP residual: "
-            "s<sub>n</sub> = V<sub>N</sub>(x<sub>n+1</sub>) - V<sub>N</sub>(x<sub>n</sub>) + &#8467;(x<sub>n</sub>,u<sub>n</sub>)"
+            "s<sub>n</sub>(α) = V<sub>N</sub>(x<sub>n+1</sub>) - V<sub>N</sub>(x<sub>n</sub>) + α&#8467;(x<sub>n</sub>,u<sub>n</sub>)"
         ),
         xaxis_title=r"$n$",
-        yaxis_title=r"$s_n$",
+        yaxis_title=r"$s_n(\alpha)$",
         hovermode="x unified",
         margin=dict(t=120),
     )
@@ -646,13 +655,18 @@ def relaxed_dp_residual(
 
 def cost_descent(
     dataset: MPCDataset,
-    html_path: str = None
+    html_path: str = None,
+    use_optimal_v: bool = False
 ) -> None:
     """Plot cost descent check.
 
     For each trajectory entry, plots
 
-    $$\Delta V_k = V_{k+1} - V_k$$
+    $$\Delta V = V_{k+1} - V_k$$
+
+    or
+
+    $$\Delta V = V_N(x_{k+1}) - V_N(x_{k})$$
 
     where $V_k$ is the MPC cost-to-go at time step $k$ (taken from the stored
     per-step value function / objective).
@@ -668,12 +682,25 @@ def cost_descent(
         The dataset containing trajectories to plot.
     html_path : str, optional
         If provided, saves the plot to the specified HTML file.
+    use_optimal_v : bool, optional
+        If True, uses the optimal value function along the predicted trajectory
     """
     if len(dataset) == 0:
         __logger__.warning("Dataset is empty.")
         return
 
     fig = go.Figure()
+
+    if use_optimal_v:
+        dim_idx = 0
+        V_getter = (lambda t: t.V_N)
+        title = ("Cost descent check (V<sub>N</sub>): "
+                 "ΔV = V<sub>N</sub>(x<sub>k+1</sub>) - V<sub>N</sub>(x<sub>k</sub>)")
+    else:
+        dim_idx = 1
+        V_getter = lambda t: t.V_pred
+        title = ("Cost to go descent check (V<sub>k</sub>): "
+                 "ΔV = V<sub>k+1</sub> - V<sub>k</sub>")
 
     per_entry_deltas = []  # list of tuples (id, deltas_2d)
     total_lines = 0
@@ -682,27 +709,35 @@ def cost_descent(
         traj = entry.trajectory
         id = entry.meta.id
 
-        V = traj.V_pred
-        deltas_2d = V[:, 1:] - V[:, :-1]
-        per_entry_deltas.append((id, deltas_2d))
-        total_lines += int(deltas_2d.shape[0])
+        V = V_getter(traj)
+        if V is None:
+            __logger__.debug(f"Entry {id} missing {'V_N' if use_optimal_v else 'V_preds'}; skipping.")
+            continue
+
+        V_arr = np.asarray(V, dtype=float)
+        deltas = np.diff(V_arr, axis=dim_idx)
+
+        per_entry_deltas.append((id, deltas))
+        total_lines += int(deltas.shape[0])
 
     if total_lines > SUMMARY_LINE_THRESHOLD:
         __logger__.info(
             f"cost_descent: {total_lines} lines exceed threshold {SUMMARY_LINE_THRESHOLD}; plotting summary stats."
         )
-        n_steps = max(int(d.shape[1]) for _, d in per_entry_deltas)
-        all_lines = []
-        for _, d in per_entry_deltas:
-            if d.shape[1] == n_steps:
-                all_lines.append(d)
-            else:
-                padded = np.full((d.shape[0], n_steps), np.nan, dtype=float)
-                padded[:, : d.shape[1]] = d
-                all_lines.append(padded)
 
-        stacked = np.vstack(all_lines)  # (total_lines, n_steps)
-        steps = np.arange(n_steps)
+        if use_optimal_v:
+            stacked = _nanpad_stack_1d([d for _, d in per_entry_deltas])
+            steps = np.arange(stacked.shape[1])
+        else:
+            lines_1d: list[NDArray] = []
+            for _, d in per_entry_deltas:
+                d2 = np.asarray(d, dtype=float)
+                if d2.ndim != 2:
+                    raise ValueError(f"Expected 2D deltas for use_optimal_v=False, got shape {d2.shape}")
+                lines_1d.extend([d2[i, :] for i in range(d2.shape[0])])
+
+            stacked = _nanpad_stack_1d(lines_1d)  # (total_lines, max_n_steps)
+            steps = np.arange(stacked.shape[1])
 
         y_min = np.nanmin(stacked, axis=0)
         y_max = np.nanmax(stacked, axis=0)
@@ -753,25 +788,40 @@ def cost_descent(
             )
         )
     else:
-        for id, deltas_2d in per_entry_deltas:
-            steps = np.tile(np.arange(deltas_2d.shape[1]), (deltas_2d.shape[0], 1))
-
-            deltas = _plotly_multiline(deltas_2d)
-            steps = _plotly_multiline(steps)
-
-            color = COLORS[id % len(COLORS)]
-
-            fig.add_trace(
-                go.Scatter(
-                    x=steps,
-                    y=deltas,
-                    mode='lines',
-                    name=f'Run {id+1} - ΔV',
-                    line=dict(color=color, width=2),
-                    legendgroup=f'Run {id+1}',
-                    showlegend=True,
+        if use_optimal_v:
+            for id, deltas_1d in per_entry_deltas:
+                color = COLORS[id % len(COLORS)]
+                fig.add_trace(
+                    go.Scatter(
+                        x=np.arange(int(deltas_1d.shape[0])),
+                        y=np.asarray(deltas_1d, dtype=float).reshape(-1),
+                        mode='lines',
+                        name=f'Run {id+1} - ΔV',
+                        line=dict(color=color, width=2),
+                        legendgroup=f'Run {id+1}',
+                        showlegend=True,
+                    )
                 )
-            )
+        else:
+            for id, deltas_2d in per_entry_deltas:
+                steps = np.tile(np.arange(deltas_2d.shape[1]), (deltas_2d.shape[0], 1))
+
+                deltas = _plotly_multiline(deltas_2d)
+                steps = _plotly_multiline(steps)
+
+                color = COLORS[id % len(COLORS)]
+
+                fig.add_trace(
+                    go.Scatter(
+                        x=steps,
+                        y=deltas,
+                        mode='lines',
+                        name=f'Run {id+1} - ΔV',
+                        line=dict(color=color, width=2),
+                        legendgroup=f'Run {id+1}',
+                        showlegend=True,
+                    )
+                )
 
     fig.add_trace(
         go.Scatter(
@@ -785,10 +835,7 @@ def cost_descent(
     )
 
     fig.update_layout(
-        title_text=(
-            "Cost to go descent check: "
-            "ΔV = V<sub>k+1</sub> - V<sub>k</sub>"
-        ),
+        title_text=title,
         xaxis_title=r"$k$",
         yaxis_title=r"$\Delta V_k$",
         hovermode="x unified",
@@ -935,3 +982,88 @@ def roa(
         fig.write_html(html_path)
     else:
         fig.show()
+
+
+def all(
+    dataset: MPCDataset,
+    state_indices: list[int] = [0, 1],
+    state_labels: list[str] | None = None,
+    control_labels: list[str] | None = None,
+    limits: list[tuple[float, float]] | None = None,
+    base_path: str | None = None,
+    resolution: int = 100,
+    plot_3d: bool = False,
+
+    # trajectory specific
+    time_bound: float | None = None,
+    plot_predictions: bool = False,
+
+    # cost descent specific
+    use_optimal_v: bool = False,
+
+    # relaxed dp specific
+    alpha: float = 1.0,
+
+    # lyapunov specific
+    lyapunov_func: Callable[[NDArray], NDArray] = None,
+    lyap_use_optimal_v: bool = False,
+
+    # roa specific
+    roa_lyapunov_func: Callable[[NDArray], NDArray] = None,
+    c_level: float = None,
+    show_level_plane: bool = False,
+    roa_bounds: NDArray = None,
+) -> None:
+    """Convenience function to plot trajectories, residuals, Lyapunov, and ROA together."""
+    state_labels = state_labels if state_labels else [f"State {i}" for i in state_indices]
+    control_labels = control_labels if control_labels else [f"Control {i}" for i in range(dataset[0].trajectory.inputs.shape[1])]
+
+    mpc_trajectories(
+        dataset=dataset,
+        state_labels=state_labels,
+        control_labels=control_labels,
+        plot_predictions=plot_predictions,
+        time_bound=time_bound,
+        html_path=f"{base_path}_trajectories.html" if base_path else None
+    )
+
+    cost_descent_path = f"{base_path}_cost_descent.html" if base_path else None
+    cost_descent(dataset=dataset, html_path=cost_descent_path, use_optimal_v=use_optimal_v)
+
+    relaxed_dp_path = f"{base_path}_relaxed_dp.html" if base_path else None
+    relaxed_dp_residual(dataset=dataset, html_path=relaxed_dp_path, alpha=alpha)
+
+    if lyapunov_func is None:
+        __logger__.warning("Lyapunov function is required for plotting the lyapunov function.")
+        return
+    
+    lyapunov_path = f"{base_path}_lyapunov.html" if base_path else None
+    lyapunov(
+        dataset=dataset,
+        lyapunov_func=lyapunov_func,
+        state_indices=state_indices,
+        state_labels=state_labels,
+        limits=limits,
+        resolution=resolution,
+        plot_3d=plot_3d,
+        use_optimal_v=lyap_use_optimal_v,
+        html_path=lyapunov_path
+    )
+
+    if roa_lyapunov_func is None:
+        __logger__.warning("ROA Lyapunov function is required for plotting the region of attraction.")
+        return 
+
+    roa_path = f"{base_path}_roa.html" if base_path else None
+    roa(
+        lyapunov_func=roa_lyapunov_func,
+        c_level=c_level,
+        bounds=roa_bounds,
+        state_indices=state_indices,
+        state_labels=state_labels,
+        limits=limits,
+        resolution=resolution,
+        plot_3d=plot_3d,
+        show_level_plane=show_level_plane,
+        html_path=roa_path
+    )

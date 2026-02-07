@@ -4,7 +4,6 @@ import numpy as np
 
 from numpy.typing import NDArray
 from acados_template import AcadosOcpSolver, AcadosSimSolver
-from enum import IntEnum
 from dataclasses import dataclass
 
 from ..mpc_data import MPCData, MPCTrajectory, MPCMeta, MPCConfig
@@ -125,7 +124,7 @@ def solve_mpc_closed_loop(
         
         status = solver.solve()
         if status not in (0, 5):
-            __logger__.warning(f"Solver failed at step {i} with status {status}. Stopping.")
+            __logger__.debug(f"Solver failed at step {i} with status {status}. Stopping.")
             is_feasible_run = False
             break
 
@@ -167,7 +166,7 @@ def solve_mpc_closed_loop(
             
             status_sim = integrator.solve()
             if status_sim != 0:
-                __logger__.error(f"Integrator failed at step {i} with status {status_sim}")
+                __logger__.debug(f"Integrator failed at step {i} with status {status_sim}")
             
             current_x = integrator.get("x")
         else:

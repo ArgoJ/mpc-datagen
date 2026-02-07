@@ -2,8 +2,8 @@ import numpy as np
 
 from numpy.typing import NDArray
 from abc import ABC
-from typing import Literal
 from dataclasses import dataclass, field
+from enum import Enum
 
 from ..mpc_data import MPCConfig
 from ..package_logger import PackageLogger
@@ -15,8 +15,12 @@ __logger__ = PackageLogger.get_logger(__name__)
 class SamplerBase(ABC):
     """Base class for initial state sampling configurations.
 
-    Custom samplers should inherit from this class and override :meth:`sample_x0`
-    (and optionally :meth:`post_init_cfg`).
+    Parameters
+    ----------
+    bounds : NDArray
+        Sampling bounds.
+    seed : int | None
+        Random seed for reproducibility. If None, the random generator is os seeded. 
 
     Notes
     -----
@@ -68,11 +72,30 @@ class SamplerBase(ABC):
         return self._rng.uniform(self.bounds[0], self.bounds[1])
 
 
+class BoundType(str, Enum):
+    ABSOLUTE = "absolute"
+    PERCENTAGE = "percentage"
+
 
 @dataclass
 class Sampler(SamplerBase):
-    """Configuration for initial state sampling when generating MPC trajectories."""
-    bound_type: Literal["absolute", "percentage"] = "absolute"
+    """
+    Configuration for initial state sampling when generating MPC trajectories.
+    
+    Parameters
+    ----------
+    bound_type : BoundType
+        Method for interpreting the `bounds` parameter.
+        - "absolute": `bounds` are directly used as [lbx; ubx] for uniform sampling.
+        - "percentage": `bounds` are interpreted as percentages in (0, 1] to shrink the solver's lbx/ubx around their midpoint.
+    bounds : NDArray
+        Sampling bounds, interpreted according to `bound_type`.
+    min_dist : float | NDArray
+        Minimum distance threshold for accepting a new sample relative to previously accepted samples.
+    max_tries : int
+        Maximum number of attempts to sample a unique initial state before raising an error.
+    """
+    bound_type: BoundType = BoundType.ABSOLUTE
     min_dist: float | NDArray = 0.0
     max_tries: int = 1_000
 
@@ -114,25 +137,24 @@ class Sampler(SamplerBase):
             raise ValueError("min_dist vector must be non-negative component-wise.")
         
         # Bound recalculation based on type
-        if self.bound_type == "percentage":
-            percentages = self.bounds
+        match self.bound_type:
+            case BoundType.PERCENTAGE:
+                percentages = self.bounds
 
-            # Basic validation
-            if percentages.shape[0] != nx:
-                raise ValueError(f"Percentage array must have shape ({nx},). Got {percentages.shape}.")
-            if np.any(percentages <= 0) or np.any(percentages > 1):
-                raise ValueError("Percentages must be in the interval (0, 1].")
+                # Basic validation
+                if percentages.shape[0] != nx:
+                    raise ValueError(f"Percentage array must have shape ({nx},). Got {percentages.shape}.")
+                if np.any(percentages <= 0) or np.any(percentages > 1):
+                    raise ValueError("Percentages must be in the interval (0, 1].")
 
-            if np.any(~np.isfinite(cfg.constraints.lbx)) or np.any(~np.isfinite(cfg.constraints.ubx)):
-                raise ValueError("Percentage mode requires finite lbx/ubx for all states.")
+                if np.any(~np.isfinite(cfg.constraints.lbx)) or np.any(~np.isfinite(cfg.constraints.ubx)):
+                    raise ValueError("Percentage mode requires finite lbx/ubx for all states.")
 
-            bounds_2xnx = self._calculate_percentage_bounds(
-                cfg.constraints.lbx, cfg.constraints.ubx, percentages)
-            self._set_and_validate_bounds(bounds_2xnx, nx)
-        elif self.bound_type == "absolute":
-            super().post_init_cfg(cfg)
-        else:
-            raise ValueError(f"Unknown bound_type: {self.bound_type}. Use 'absolute' or 'percentage'.")
+                bounds_2xnx = self._calculate_percentage_bounds(
+                    cfg.constraints.lbx, cfg.constraints.ubx, percentages)
+                self._set_and_validate_bounds(bounds_2xnx, nx)
+            case BoundType.ABSOLUTE:
+                super().post_init_cfg(cfg)
 
     def _x0_is_too_close(self, x0: NDArray, existing_x0: NDArray) -> bool:
         """Return True if `x0` is within the configured minimum distance of `existing_x0`.

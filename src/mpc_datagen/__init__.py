@@ -1,4 +1,11 @@
-from .generation import MPCDataGenerator, EpsBandConfig, Sampler
+from .generation import (
+    MPCDataGenerator,
+    EpsBandConfig,
+    Sampler,
+    SamplerBase,
+    BoundType
+)
+
 from .mpc_data import (
     MPCData,
     MPCDataset,
@@ -9,12 +16,13 @@ from .mpc_data import (
     LinearSystem,
     Constraints,
 )
+
 from .package_logger import PackageLogger
 
 logger = PackageLogger.setup()
 
 __all__ = [
-    "MPCDataGenerator",
+    # Data structures
     "MPCData",
     "MPCDataset",
     "MPCConfig",
@@ -24,5 +32,10 @@ __all__ = [
     "LinearSystem",
     "Constraints",
     "EpsBandConfig",
+
+    # Generation
+    "MPCDataGenerator",
     "Sampler",
+    "SamplerBase",
+    "BoundType",
 ]

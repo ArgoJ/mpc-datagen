@@ -745,14 +745,13 @@ class MPCData:
             Recalculate costs from stored predicted trajectories.
         truncate : bool
             If True, truncate stored arrays/status codes to the effective simulated length.
-            The effective length is inferred from `meta.status_codes` (preferred) or
-            `meta.steps_simulated`.
+            The effective length is inferred from `meta.steps_simulated`.
         """
         if self.meta is None and truncate:
             __logger__.warning(f"Meta information is missing. Cannot determine effective simulation length for truncation.")
             truncate = False
 
-        if truncate and int(getattr(self.meta, "steps_simulated", 0)) > 0:
+        if truncate and int(getattr(self.meta, "steps_simulated", 0)) >= 0:
             T_eff = int(self.meta.steps_simulated)
             self.config.T_sim = T_eff
             traj = self.trajectory
@@ -791,12 +790,12 @@ class MPCData:
             raise ValueError(f"Trajectory times shape mismatch: expected {(T_sim + 1,)}, got {traj.times.shape}")
         if traj.V_solver.shape != (T_sim,):
             raise ValueError(f"Trajectory solver_costs shape mismatch: expected {(T_sim,)}, got {traj.V_solver.shape}")
-        if len(self.meta.status_codes) != T_sim:
-            raise ValueError(f"Meta status codes length mismatch: expected {T_sim}, got {len(self.meta.status_codes)}")
         if not self.is_feasible() and traj.feasible:
             __logger__.warning(f"Entry marked as feasible, but solver status codes indicate infeasibility.")
             traj.feasible = False
-            
+        if len(self.meta.status_codes) != T_sim and (not traj.feasible and len(self.meta.status_codes) != (T_sim+1)):
+            raise ValueError(f"Meta status codes length mismatch: expected {T_sim}, got {len(self.meta.status_codes)}")
+
         # Optional arrays
         N = self.config.N
         if N != traj.horizon:
@@ -806,7 +805,7 @@ class MPCData:
                 raise ValueError(f"Predicted states shape mismatch: expected {(T_sim, N+1, nx)}, got {traj.predicted_states.shape}")
             if traj.predicted_inputs.shape != (T_sim, N, nu):
                 raise ValueError(f"Predicted inputs shape mismatch: expected {(T_sim, N, nu)}, got {traj.predicted_inputs.shape}")
-            
+
         if recalculate_costs:
             traj.recalculate_costs(self.config.cost)
             if traj.V_N is not None:

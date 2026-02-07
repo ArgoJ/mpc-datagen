@@ -98,9 +98,9 @@ class StabilityVerifier:
                 "This verifier assumes a single yref for the entire dataset."
             )
 
-        if local_cfg.T_sim > self.traj.sim_steps or local_cfg.T_sim < 1:
-            raise ValueError(
-                "Entry T_sim exceeds trajectory length. T_sim must be <= trajectory length and > 1."
+        if local_cfg.T_sim > self.traj.sim_steps or local_cfg.T_sim < 0:
+             raise ValueError(
+                "Entry T_sim exceeds trajectory length. T_sim must be <= trajectory length and > 1: "
                 f"{local_cfg.T_sim} > {self.traj.sim_steps}"
             )
         if self.cfg.constraints.has_bx_e() != local_cfg.constraints.has_bx_e():
