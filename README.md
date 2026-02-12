@@ -98,7 +98,7 @@ data = solve_mpc_closed_loop(solver, T_sim=100)
 ## Logging
 
 ```python
-from mpc_datagen.package_logger import PackageLogger
+from mpc_datagen.package_logger import get_package_logger
 
 PackageLogger.setup()
 ```

@@ -6,9 +6,9 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from ..mpc_data import MPCConfig
-from ..package_logger import PackageLogger
+from ..package_logger import get_package_logger
 
-__logger__ = PackageLogger(__name__)
+__logger__ = get_package_logger(__name__)
 
 
 @dataclass

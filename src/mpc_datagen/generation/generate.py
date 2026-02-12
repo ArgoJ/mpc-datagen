@@ -1,17 +1,14 @@
-import numpy as np
-
 from numpy.typing import NDArray
 from acados_template import AcadosOcpSolver
-from tqdm import tqdm
 from dataclasses import replace
 
 from .mpc_solve import solve_mpc_closed_loop, EpsBandConfig
 from .sampler import Sampler, SamplerBase
 from ..extractor import MPCConfigExtractor
 from ..mpc_data import MPCDataset
-from ..package_logger import PackageLogger
+from ..package_logger import get_package_logger
 
-__logger__ = PackageLogger(__name__)
+__logger__ = get_package_logger(__name__)
 
 
 class MPCDataGenerator:
@@ -71,7 +68,7 @@ class MPCDataGenerator:
         dataset = MPCDataset()
         accepted_x0: list[NDArray] = []
 
-        with PackageLogger.tqdm_progress(desc="Generating Trajectories", total=n_samples) as pbar:
+        with __logger__.tqdm(desc="Generating Trajectories", total=n_samples) as pbar:
             for _ in pbar:
                 x0 = self.sampler.sample_x0(accepted_x0)
                 temp_cfg = replace(

@@ -6,9 +6,9 @@ from acados_template import AcadosOcpSolver
 
 from .mpc_data import MPCConfig, LinearSystem
 from .linalg import discretize_and_linearize_rk4
-from .package_logger import PackageLogger
+from .package_logger import get_package_logger
 
-__logger__ = PackageLogger(__name__)
+__logger__ = get_package_logger(__name__)
 
 
 # --- Helpers ---

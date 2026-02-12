@@ -6,10 +6,11 @@ from numpy.typing import NDArray
 from acados_template import AcadosOcpSolver, AcadosSimSolver
 from dataclasses import dataclass
 
+from ..package_logger import get_package_logger
 from ..mpc_data import MPCData, MPCTrajectory, MPCMeta, MPCConfig
 from ..extractor import MPCConfigExtractor
 
-__logger__ = logging.getLogger(__name__)
+__logger__ = get_package_logger(__name__)
 
 
 @dataclass
