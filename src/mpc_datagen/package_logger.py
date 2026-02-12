@@ -1,6 +1,8 @@
 import logging
 import sys
+
 from tqdm import tqdm
+from contextlib import contextmanager
 
 DEFAULT_MODULE_NAME = "mpc_datagen"
 DEFAULT_SHORT_NAME = "mdg"
@@ -103,3 +105,31 @@ class PackageLogger:
         logger.removeHandler(handler_to_remove)
         for h in handlers_to_restore:
             logger.addHandler(h)
+
+    @staticmethod
+    @contextmanager
+    def tqdm_progress(package_name: str = DEFAULT_MODULE_NAME, **tqdm_kwargs):
+        """
+        A context manager that safely redirects logging to tqdm, 
+        creates a progress bar, and cleans up everything at the end.
+        
+        Parameters
+        ----------
+        package_name : str
+            The name of the logger.
+        **tqdm_kwargs : dict
+            Arguments passed directly to tqdm (e.g., total, desc, unit).
+        
+        Yields
+        ------
+            pbar: The tqdm instance.
+        """
+        tqdm_handler, restored_handlers = PackageLogger.add_tqdm_handler(package_name)
+        pbar = tqdm(**tqdm_kwargs)
+        
+        try:
+            yield pbar
+        finally:
+            pbar.close()
+            if tqdm_handler:
+                PackageLogger.restore_handlers(package_name, tqdm_handler, restored_handlers)

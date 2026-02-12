@@ -9,7 +9,7 @@ from .mpc_solve import solve_mpc_closed_loop, EpsBandConfig
 from .sampler import Sampler, SamplerBase
 from ..extractor import MPCConfigExtractor
 from ..mpc_data import MPCDataset
-from ..package_logger import PackageLogger, DEFAULT_MODULE_NAME
+from ..package_logger import PackageLogger
 
 __logger__ = PackageLogger.get_logger(__name__)
 
@@ -70,11 +70,9 @@ class MPCDataGenerator:
         """
         dataset = MPCDataset()
         accepted_x0: list[NDArray] = []
-        restored_handlers = []
-        tqdm_handler, restored_handlers = PackageLogger.add_tqdm_handler()
 
-        try:
-            for _ in tqdm(range(n_samples), desc="Generating Trajectories"):
+        with PackageLogger.tqdm_progress(desc="Generating Trajectories", total=n_samples) as pbar:
+            for _ in pbar:
                 x0 = self.sampler.sample_x0(accepted_x0)
                 temp_cfg = replace(
                     self.mpc_config, 
@@ -91,8 +89,5 @@ class MPCDataGenerator:
 
                 dataset.add(mpc_data)
                 accepted_x0.append(x0)
-        finally:
-            if tqdm_handler:
-                PackageLogger.restore_handlers(DEFAULT_MODULE_NAME, tqdm_handler, restored_handlers)
 
         return dataset
