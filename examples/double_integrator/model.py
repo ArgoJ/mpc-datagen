@@ -272,7 +272,7 @@ if __name__ == "__main__":
             time_bound=T_sim * dt,
             plot_3d=True,
             plot_predictions=False,
-            alpha=veri_stats.details["asym_stab_report"].min_alpha,
+            alpha=1.0, # veri_stats.details["asym_stab_report"].min_alpha,
             use_optimal_v=False,
             lyapunov_func=lyap_fun,
             lyap_use_optimal_v=True,

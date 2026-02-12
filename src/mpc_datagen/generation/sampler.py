@@ -8,7 +8,7 @@ from enum import Enum
 from ..mpc_data import MPCConfig
 from ..package_logger import PackageLogger
 
-__logger__ = PackageLogger.get_logger(__name__)
+__logger__ = PackageLogger(__name__)
 
 
 @dataclass

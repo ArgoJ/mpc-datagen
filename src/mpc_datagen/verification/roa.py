@@ -8,7 +8,7 @@ from ..package_logger import PackageLogger
 from ..extractor import extract_QR
 from ..linalg import sym
 
-__logger__ = PackageLogger.get_logger(__name__)
+__logger__ = PackageLogger(__name__)
 
 class ROAVerifier:
     def __init__(self, cfg: MPCConfig):

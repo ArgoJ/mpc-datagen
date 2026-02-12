@@ -9,7 +9,7 @@ from collections.abc import Callable
 from .mpc_data import MPCDataset
 from .package_logger import PackageLogger
 
-__logger__ = PackageLogger.get_logger(__name__)
+__logger__ = PackageLogger(__name__)
 
 
 COLORS = [
@@ -520,6 +520,12 @@ def relaxed_dp_residual(
         return
 
     fig = go.Figure()
+    if alpha == 1.0:
+        title = "Relaxed DP residual: s<sub>n</sub> = V<sub>N</sub>(x<sub>n+1</sub>) - V<sub>N</sub>(x<sub>n</sub>) + &#8467;(x<sub>n</sub>,u<sub>n</sub>)"
+    elif alpha < 1.0 and alpha >= 0.0:
+        title = f"Relaxed DP residual: s<sub>n</sub>(&alpha;) = V<sub>N</sub>(x<sub>n+1</sub>) - V<sub>N</sub>(x<sub>n</sub>) + &alpha;&#8467;(x<sub>n</sub>,u<sub>n</sub>)"
+    else:
+        raise ValueError("alpha must be in the range (0, 1].")
 
     per_entry = []  # list of tuples (id, deltas)
 
@@ -636,10 +642,7 @@ def relaxed_dp_residual(
     )
 
     fig.update_layout(
-        title_text=(
-            "Relaxed DP residual: "
-            "s<sub>n</sub>(α) = V<sub>N</sub>(x<sub>n+1</sub>) - V<sub>N</sub>(x<sub>n</sub>) + α&#8467;(x<sub>n</sub>,u<sub>n</sub>)"
-        ),
+        title_text=title,
         xaxis_title=r"$n$",
         yaxis_title=r"$s_n(\alpha)$",
         hovermode="x unified",

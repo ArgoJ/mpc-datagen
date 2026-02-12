@@ -11,7 +11,7 @@ from ..mpc_data import MPCData, MPCDataset, MPCConfig, MPCMeta, MPCTrajectory, L
 from ..package_logger import PackageLogger
 
 
-__logger__ = PackageLogger.get_logger(__name__)
+__logger__ = PackageLogger(__name__)
     
 
 class StabilityVerifier:

@@ -8,7 +8,7 @@ from .mpc_data import MPCConfig, LinearSystem
 from .linalg import discretize_and_linearize_rk4
 from .package_logger import PackageLogger
 
-__logger__ = PackageLogger.get_logger(__name__)
+__logger__ = PackageLogger(__name__)
 
 
 # --- Helpers ---

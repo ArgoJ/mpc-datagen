@@ -11,7 +11,7 @@ from pathlib import Path
 from .linalg import weighted_quadratic_norm
 from .package_logger import PackageLogger
 
-__logger__ = PackageLogger.get_logger(__name__)
+__logger__ = PackageLogger(__name__)
 
 def _is_defined_array(arr: NDArray | None, not_zero: bool = True) -> bool:
     """Check if an array is defined and non-empty."""

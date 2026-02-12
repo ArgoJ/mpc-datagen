@@ -11,7 +11,7 @@ from ..extractor import MPCConfigExtractor
 from ..mpc_data import MPCDataset
 from ..package_logger import PackageLogger
 
-__logger__ = PackageLogger.get_logger(__name__)
+__logger__ = PackageLogger(__name__)
 
 
 class MPCDataGenerator:
