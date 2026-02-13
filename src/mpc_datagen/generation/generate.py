@@ -68,7 +68,7 @@ class MPCDataGenerator:
         dataset = MPCDataset()
         accepted_x0: list[NDArray] = []
 
-        with __logger__.tqdm(desc="Generating Trajectories", total=n_samples) as pbar:
+        with __logger__.tqdm(range(n_samples), desc="Generating Trajectories") as pbar:
             for _ in pbar:
                 try:
                     x0 = self.sampler.sample_x0(accepted_x0)
