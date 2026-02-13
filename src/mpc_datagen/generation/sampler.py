@@ -32,7 +32,8 @@ class SamplerBase(ABC):
 
     bounds: NDArray = field(default_factory=lambda: np.array([]))
     seed: int | None = None
-
+    
+    _post_init_cfg_called: bool = field(init=False, repr=False, default=False)
     _rng: np.random.Generator = field(init=False, repr=False)
 
     def __post_init__(self):
@@ -66,6 +67,7 @@ class SamplerBase(ABC):
             return
 
         self._set_and_validate_bounds(self.bounds, nx)
+        self._post_init_cfg_called = True
 
     def sample_x0(self) -> NDArray:
         """Sample an initial state $x_0$."""
@@ -155,6 +157,8 @@ class Sampler(SamplerBase):
                 self._set_and_validate_bounds(bounds_2xnx, nx)
             case BoundType.ABSOLUTE:
                 super().post_init_cfg(cfg)
+        
+        self._post_init_cfg_called = True
 
     def _x0_is_too_close(self, x0: NDArray, existing_x0: NDArray) -> bool:
         """Return True if `x0` is within the configured minimum distance of `existing_x0`.
@@ -167,6 +171,9 @@ class Sampler(SamplerBase):
 
     def sample_x0(self, accepted_x0: list[NDArray] | None = None) -> NDArray:
         """Uniformly sample an x0 within bounds, rejecting if too close to any previously accepted x0."""
+        if not self._post_init_cfg_called:
+            raise SyntaxError("Call post_init_cfg(cfg) with the MPCConfig before sampling to enable uniqueness checks based on the configured min_dist.")
+
         if self._uniqueness_disabled:
             return super().sample_x0()
 
