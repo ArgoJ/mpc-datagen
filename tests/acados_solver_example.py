@@ -1,6 +1,8 @@
 # %% General Imports
 import numpy as np
 import sys
+
+from numpy.typing import NDArray
 from pathlib import Path
 from scipy.linalg import solve_discrete_are, block_diag
 from casadi import SX

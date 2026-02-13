@@ -17,7 +17,7 @@ from .mpc_data import (
     Constraints,
 )
 
-from .package_logger import get_package_logger
+from .package_logger import PackageLogger
 
 logger = PackageLogger.setup()
 
