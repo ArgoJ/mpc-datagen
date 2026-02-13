@@ -202,7 +202,7 @@ if __name__ == "__main__":
 
     x0_bounds=np.array([0.8, 1.0])
     T_sim=40
-    n_samples=200
+    n_samples=20000
     bounds_scale=10.0
     terminal_box_halfwidth=2.0
 
@@ -289,16 +289,16 @@ if __name__ == "__main__":
         N=20,
     )
 
-    # Case 2: equilibrium terminal constraint x(N)=0 (sample close so feasibility is easy)
-    run_case(
-        name="Equilibrium terminal constraint",
-        terminal_mode="equilibrium",
-        N=25,
-    )
+    # # Case 2: equilibrium terminal constraint x(N)=0 (sample close so feasibility is easy)
+    # run_case(
+    #     name="Equilibrium terminal constraint",
+    #     terminal_mode="equilibrium",
+    #     N=25,
+    # )
 
-    # Case 3: no terminal ingredients (zero terminal weight, no terminal bounds)
-    run_case(
-        name="No terminal ingredients (Grüne horizon condition)",
-        terminal_mode="none",
-        N=70,
-    )
+    # # Case 3: no terminal ingredients (zero terminal weight, no terminal bounds)
+    # run_case(
+    #     name="No terminal ingredients (Grüne horizon condition)",
+    #     terminal_mode="none",
+    #     N=70,
+    # )

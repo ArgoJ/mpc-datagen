@@ -58,13 +58,13 @@ class MPCMeta:
     @classmethod
     def from_hdf5(cls, grp: h5py.Group) -> "MPCMeta":
         """Load metadata from JSON attribute in the provided group."""
-        meta_json = grp.attrs.get("meta_json", "{}")
+        meta_json = grp.attrs.get("meta", "{}")
         meta_dict = json.loads(meta_json)
         return cls(**meta_dict)
 
     def to_hdf5(self, grp: h5py.Group) -> None:
         """Save metadata as JSON attribute in the provided group."""
-        grp.attrs["meta_json"] = json.dumps(asdict(self))
+        grp.attrs["meta"] = json.dumps(asdict(self))
 
 @dataclass
 class LinearSystem:

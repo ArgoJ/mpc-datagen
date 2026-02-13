@@ -70,7 +70,12 @@ class MPCDataGenerator:
 
         with __logger__.tqdm(desc="Generating Trajectories", total=n_samples) as pbar:
             for _ in pbar:
-                x0 = self.sampler.sample_x0(accepted_x0)
+                try:
+                    x0 = self.sampler.sample_x0(accepted_x0)
+                except RuntimeError as e:
+                    __logger__.error(f"Sampling failed: {e} \n - Stopping generation.")
+                    break
+
                 temp_cfg = replace(
                     self.mpc_config, 
                     constraints=replace(self.mpc_config.constraints, x0=x0))

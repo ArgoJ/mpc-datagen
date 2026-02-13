@@ -180,8 +180,8 @@ class Sampler(SamplerBase):
                 return x0
 
         raise RuntimeError(
-            "Failed to sample a unique x0 within max_tries. "
-            "Try decreasing min_dist or increasing max_tries."
+            f"Failed to sample a unique x0 within {self.max_tries} tries. "
+            "Try decreasing `min_dist` or increasing `max_tries`."
         )
 
     @staticmethod
