@@ -21,7 +21,7 @@ from .mpc_data import (
 
 # Submodules
 from . import linalg as mdg_linalg
-from . import plots as mdg_plots
+from . import plots as mdg_plt
 from . import extractor as mdg_extractor
 
 # Logger
@@ -48,6 +48,6 @@ __all__ = [
 
     # Submodules
     "mdg_linalg",
-    "mdg_plots",
+    "mdg_plt",
     "mdg_extractor",
 ]
