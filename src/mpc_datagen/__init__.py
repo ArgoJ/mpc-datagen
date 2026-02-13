@@ -1,3 +1,4 @@
+# Generation
 from .generation import (
     MPCDataGenerator,
     EpsBandConfig,
@@ -6,6 +7,7 @@ from .generation import (
     BoundType
 )
 
+# Data structures
 from .mpc_data import (
     MPCData,
     MPCDataset,
@@ -17,8 +19,13 @@ from .mpc_data import (
     Constraints,
 )
 
-from .package_logger import PackageLogger
+# Submodules
+from . import linalg as mdg_linalg
+from . import plots as mdg_plots
+from . import extractor as mdg_extractor
 
+# Logger
+from .package_logger import PackageLogger
 logger = PackageLogger.setup()
 
 __all__ = [
@@ -38,4 +45,9 @@ __all__ = [
     "Sampler",
     "SamplerBase",
     "BoundType",
+
+    # Submodules
+    "mdg_linalg",
+    "mdg_plots",
+    "mdg_extractor",
 ]
