@@ -247,7 +247,7 @@ if __name__ == "__main__":
         )
         dataset = generator.generate(n_samples=n_samples)
         dataset.validate()
-        dataset.save(f"data/double_integrator_{terminal_mode}_N{N}_data")
+        dataset.save(f"data/double_integrator_{terminal_mode}_N{N}_data.hdf5")
 
         veri_stats = StabilityVerifier.verify(dataset, solver, alpha_required=1e-4)
         VerificationRender(veri_stats).render()
