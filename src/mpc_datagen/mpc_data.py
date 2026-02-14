@@ -54,6 +54,7 @@ class MPCMeta:
     sim_duration_wall: float = 0.0
     steps_simulated: int = 0
     status_codes: list[int] = field(default_factory=list)
+    feasible: bool = False
 
     @classmethod
     def from_hdf5(cls, grp: h5py.Group) -> "MPCMeta":
@@ -521,8 +522,6 @@ class MPCTrajectory:
         Predicted open-loop state trajectories at each step. Shape: (T_sim, N+1, nx).
     predicted_inputs : NDArray, optional
         Predicted open-loop input trajectories at each step. Shape: (T_sim, N, nu).
-    feasible : bool
-        Flag indicating if the OCP was feasible throughout the trajectory. Default: True.
 
     Properties
     ----------
@@ -540,7 +539,6 @@ class MPCTrajectory:
     V_horizon: NDArray | None = None
     predicted_states: NDArray | None = None
     predicted_inputs: NDArray | None = None
-    feasible: bool = True
     
     @property
     def sim_steps(self) -> int:
@@ -649,7 +647,6 @@ class MPCTrajectory:
             V_horizon=traj_grp["V_horizon"][:, :] if "V_horizon" in traj_grp else None,
             predicted_states=traj_grp["predicted_states"][:, :, :] if "predicted_states" in traj_grp else None,
             predicted_inputs=traj_grp["predicted_inputs"][:, :, :] if "predicted_inputs" in traj_grp else None,
-            feasible=bool(traj_grp.attrs.get("feasible", True)),
         )
 
     def to_hdf5(self, grp: h5py.Group, save_ocp_trajs: bool = True) -> None:
@@ -712,7 +709,6 @@ class MPCTrajectory:
             V_solver=costs,
             predicted_states=predicted_states,
             predicted_inputs=predicted_inputs,
-            feasible=True
         )
 
 
@@ -747,12 +743,13 @@ class MPCData:
             If True, truncate stored arrays/status codes to the effective simulated length.
             The effective length is inferred from `meta.steps_simulated`.
         """
-        if self.meta is None and truncate:
+        meta = self.meta
+        if meta is None and truncate:
             __logger__.warning(f"Meta information is missing. Cannot determine effective simulation length for truncation.")
             truncate = False
 
-        if truncate and int(getattr(self.meta, "steps_simulated", 0)) >= 0:
-            T_eff = int(self.meta.steps_simulated)
+        if truncate and int(getattr(meta, "steps_simulated", 0)) >= 0:
+            T_eff = int(meta.steps_simulated)
             self.config.T_sim = T_eff
             traj = self.trajectory
 
@@ -790,11 +787,11 @@ class MPCData:
             raise ValueError(f"Trajectory times shape mismatch: expected {(T_sim + 1,)}, got {traj.times.shape}")
         if traj.V_solver.shape != (T_sim,):
             raise ValueError(f"Trajectory solver_costs shape mismatch: expected {(T_sim,)}, got {traj.V_solver.shape}")
-        if not self.is_feasible() and traj.feasible:
+        if not self.is_feasible() and meta.feasible:
             __logger__.warning(f"Entry marked as feasible, but solver status codes indicate infeasibility.")
-            traj.feasible = False
-        if len(self.meta.status_codes) != T_sim and (not traj.feasible and len(self.meta.status_codes) != (T_sim+1)):
-            raise ValueError(f"Meta status codes length mismatch: expected {T_sim}, got {len(self.meta.status_codes)}")
+            self.meta.feasible = False
+        if len(meta.status_codes) != T_sim and (not meta.feasible and len(meta.status_codes) != (T_sim+1)):
+            raise ValueError(f"Meta status codes length mismatch: expected {T_sim}, got {len(meta.status_codes)}")
 
         # Optional arrays
         N = self.config.N
@@ -824,15 +821,15 @@ class MPCData:
     def is_feasible(self) -> bool:
         """Check if the trajectory is feasible."""
         # Prefer explicit feasibility flag if present
-        if hasattr(self.trajectory, "feasible") and (self.trajectory.feasible is False):
+        meta = self.meta
+        if not bool(meta.feasible):
             return False
 
         # Non-zero solver status codes indicate failure
-        if self.meta is not None and getattr(self.meta, "status_codes", None):
-            if any(int(c) != 0 for c in self.meta.status_codes):
-                __logger__.warning(f"Entry ID {getattr(self.meta, 'id', 'unknown')} indicates non-zero solver status codes. "
-                                   f"Status Codes: {np.unique(self.meta.status_codes).tolist()}")
-                return False
+        if any(int(c) != 0 for c in meta.status_codes):
+            __logger__.warning(f"Entry ID {getattr(meta, 'id', 'unknown')} indicates non-zero solver status codes. "
+                                f"Status Codes: {np.unique(meta.status_codes).tolist()}")
+            return False
 
         # NaNs in key arrays indicate an invalid run
         t = self.trajectory
@@ -914,7 +911,6 @@ class MPCDataset:
         )
         entry.trajectory.to_hdf5(grp, save_ocp)
         entry.meta.to_hdf5(grp)
-        grp.attrs["feasible"] = entry.trajectory.feasible
 
     def _get_field_map(self) -> dict[str, list[str]]:
         """Returns a mapping of config category to list of field names."""
@@ -1189,7 +1185,7 @@ class MPCDataset:
             # Compile Report
             results.append({
                 "id": idx,
-                "feasible": bool(traj.feasible and solver_success and (not traj_has_nan)),
+                "feasible": bool(meta.feasible and solver_success and (not traj_has_nan)),
                 "constraints_met": all_constraints_met,
                 "stable": is_stable,
                 "final_dist": dist_to_goal,

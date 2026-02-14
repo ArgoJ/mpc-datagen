@@ -124,12 +124,13 @@ def solve_mpc_closed_loop(
         solver.set(0, "ubx", current_x)
         
         status = solver.solve()
+        status_codes.append(status)
+
         if status not in (0, 5):
             __logger__.debug(f"Solver failed at step {i} with status {status}. Stopping.")
             is_feasible_run = False
             break
 
-        status_codes.append(status)
         solve_times.append(solver.get_stats("time_tot"))
                 
         # Retrieve Predictions
@@ -186,9 +187,6 @@ def solve_mpc_closed_loop(
 
     sim_end_time = time.time()
     
-    # Update feasibility
-    traj.feasible = is_feasible_run
-
     # Construct Meta Information
     meta = MPCMeta(
         timestamp=time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(sim_start_time)),
@@ -197,7 +195,8 @@ def solve_mpc_closed_loop(
         solve_time_total=float(np.sum(solve_times)) if solve_times else 0.0,
         sim_duration_wall=sim_end_time - sim_start_time,
         steps_simulated=T_eff,
-        status_codes=status_codes
+        status_codes=status_codes,
+        feasible=is_feasible_run,
     )
     
     data = MPCData(

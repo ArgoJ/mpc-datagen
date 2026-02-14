@@ -1,7 +1,7 @@
 import numpy as np
 
 from numpy.typing import NDArray
-from collections.abc import Generator
+from collections.abc import Generator, Iterable
 from acados_template import AcadosOcpSolver
 
 from .reports import *
@@ -63,6 +63,7 @@ class StabilityVerifier:
 
     def __iter__(self) -> Generator[MPCData, None, None]:
         for entry in self.dataset:
+            self._bind_entry(entry)
             yield entry
 
 
@@ -122,25 +123,33 @@ class StabilityVerifier:
 
 
     # --- DATASET ITERATORS ---
-    def iter_binded_entries(self, require_feasibility: bool = True) -> Generator[MPCData, None, None]:
-        """Iterator over dataset entries with optional filtering/binding.
-        
-        Parameters
-        ----------
-        require_feasibility : bool
-            Whether to only yield feasible entries.
-            
-        Yields
-        ------
-        entry : MPCData
-            The next entry in the dataset.
-        """
-        for entry in self:
-            if require_feasibility and (not entry.is_feasible()):
-                continue
-            
-            self._bind_entry(entry)
-            yield entry
+    class _FeasibleBoundEntries:
+        """Sized iterable over feasible entries that binds verifier state on iteration."""
+
+        def __init__(self, verifier: "StabilityVerifier", idx_list: list[int]):
+            if not idx_list:
+                raise ValueError("idx_list for _FeasibleBoundEntries cannot be empty.")
+
+            self._verifier = verifier
+            self._idx_list = idx_list
+
+        def __iter__(self) -> Generator[MPCData, None, None]:
+            for idx in self._idx_list:
+                entry = self._verifier.dataset[idx]
+                self._verifier._bind_entry(entry)
+                yield entry
+
+        def __len__(self) -> int:
+            return len(self._idx_list)
+
+    def feasible_indices(self) -> list[int]:
+        """Return indices of feasible entries in the dataset."""
+        return [idx for idx, entry in enumerate(self.dataset) if entry.is_feasible()]
+
+    def iter_feasible(self) -> Iterable[MPCData]:
+        """Return a sized iterable over feasible entries while binding internal state."""
+        idx_list = self.feasible_indices()
+        return self._FeasibleBoundEntries(self, idx_list)
 
 
     # --- L* OPTIMIZATION ---
@@ -271,23 +280,25 @@ class StabilityVerifier:
         violation_count = 0
         total_steps = 0
         
-        for _ in self.iter_binded_entries():
-            diffs = self.lyapunov_descent()
-            total_steps += len(diffs)
-            
-            # V_next - V_curr <= 0 (allowing for tolerance)
-            # Violation if: V_next - V_curr > self.eps
-            violation_mask = diffs > self.eps
-            n_violations = np.sum(violation_mask)
-            
-            if n_violations > 0:
-                violation_count += n_violations
-                max_increase = max(max_increase, float(np.max(diffs[violation_mask])))
+        with  __logger__.tqdm(
+            self.iter_feasible(),
+            desc="Checking Lyapunov descent",
+            unit="trajectory",
+        ) as pbar:
+            for _ in pbar:
+                diffs = self.lyapunov_descent()
+                total_steps += len(diffs)
+                
+                # V_next - V_curr <= 0 (allowing for tolerance)
+                # Violation if: V_next - V_curr > self.eps
+                violation_mask = diffs > self.eps
+                n_violations = np.sum(violation_mask)
+                
+                if n_violations > 0:
+                    violation_count += n_violations
+                    max_increase = max(max_increase, float(np.max(diffs[violation_mask])))
         
         is_stable = (violation_count == 0)
-        msg = (f"{'PASS' if is_stable else 'FAIL'}: "
-               f"{violation_count}/{total_steps} violations, "
-               f"max_increase={max_increase:.4e}")
 
         return LyapunovDescentReport(
             is_stable=is_stable,
@@ -386,14 +397,20 @@ class StabilityVerifier:
         violations = []
         used = 0
 
-        for _ in self.iter_binded_entries(require_feasibility=True):
-            stats = self.alpha_and_max_violation(alpha_required=alpha_required)
-            if stats.n_used == 0:
-                continue
-            if np.isfinite(stats.min_alpha):
-                alphas.append(float(stats.min_alpha))
-            violations.append(float(stats.max_violation))
-            used += 1
+
+        with __logger__.tqdm(
+            self.iter_feasible(),
+            desc="Checking asymptotic stability (alpha-decay)",
+            unit="trajectory",
+        ) as pbar:
+            for _ in pbar:
+                stats = self.alpha_and_max_violation(alpha_required=alpha_required)
+                if stats.n_used == 0:
+                    continue
+                if np.isfinite(stats.min_alpha):
+                    alphas.append(float(stats.min_alpha))
+                violations.append(float(stats.max_violation))
+                used += 1
 
         if used == 0:
             min_alpha = 0.0
@@ -470,10 +487,14 @@ class StabilityVerifier:
 
         N = int(cfg0.N)
         gamma_values: list[float] = []
-        
-        for _ in self.iter_binded_entries():
-            gamma_values.extend(self.gamma_estimates())
-                
+
+        with __logger__.tqdm(
+            self.iter_feasible(),
+            desc="Estimating Grüne gamma values",
+            unit="trajectory",
+        ) as pbar:
+            for _ in pbar:
+                gamma_values.extend(self.gamma_estimates())
 
         if not gamma_values:
             return GrüneHorizonReport(

@@ -232,7 +232,7 @@ if __name__ == "__main__":
             bounds=x0_bounds,
             min_dist=np.array([1e-2, 1e-3]),
             max_tries=1000,
-            seed=42,
+            seed=4597525,
         )
         eps_cfg = EpsBandConfig(
             eps_band=np.array([0.2, 1e-2]), 
