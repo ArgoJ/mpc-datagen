@@ -45,7 +45,29 @@ def _values_equal(a, b) -> bool:
 
 @dataclass
 class MPCMeta:
-    """Metadata regarding the MPC execution."""
+    """Metadata regarding the MPC execution.
+    
+    Attributes
+    ----------
+    id : int
+        Unique identifier for the MPC run (e.g., UUID or sequential ID).
+    timestamp : str
+        ISO 8601 formatted timestamp of when the MPC run was executed.
+    solve_time_mean : float
+        Mean time taken by the solver across all iterations (in seconds).
+    solve_time_max : float
+        Maximum time taken by the solver in any iteration (in seconds).
+    solve_time_total : float
+        Total time taken by the solver across all iterations (in seconds).
+    sim_duration_wall : float
+        Total wall-clock time for the entire simulation run (in seconds).
+    steps_simulated : int
+        Total number of simulation steps completed in the closed-loop run.
+    status_codes : list[int]
+        List of solver status codes returned at each iteration (e.g., 0 for success, non-zero for errors).
+    feasible : bool
+        Overall feasibility of the closed-loop trajectory.
+    """
     id: int = -1
     timestamp: str = ""
     solve_time_mean: float = 0.0
@@ -69,7 +91,17 @@ class MPCMeta:
 
 @dataclass
 class LinearSystem:
-    """Linearized system matrices."""
+    """Linearized system matrices.
+    
+    Attributes
+    ----------
+    A : NDArray
+        State transition matrix (discrete-time). Shape: (nx, nx).
+    B : NDArray
+        Control input matrix (discrete-time). Shape: (nx, nu).
+    gd : NDArray
+        Affine term (discrete-time). Shape: (nx,).
+    """
     A: NDArray = field(default_factory=lambda: np.array([[]]))
     B: NDArray = field(default_factory=lambda: np.array([[]]))
     gd: NDArray = field(default_factory=lambda: np.array([[]]))
@@ -836,6 +868,27 @@ class MPCData:
         if np.isnan(t.states).any() or np.isnan(t.inputs).any() or np.isnan(t.V_solver).any():
             return False
         return True
+    
+    def to_hdf5(self, grp: h5py.Group, exclude: dict[str, set[str]] = None, save_ocp_traj: bool = True) -> None:
+        """Save the entire MPCData entry to a trajectory group."""
+        self.config.to_hdf5(
+            grp,
+            exclude_attrs=exclude["attrs"] if exclude else set(),
+            exclude_constraints=exclude["constraints"] if exclude else set(),
+            exclude_model=exclude["model"] if exclude else set(),
+            exclude_cost=exclude["cost"] if exclude else set(),
+            group_name="config"
+        )
+        self.trajectory.to_hdf5(grp, save_ocp=save_ocp_traj)
+        self.meta.to_hdf5(grp)
+
+    @classmethod
+    def from_hdf5(cls, grp: h5py.Group) -> "MPCData":
+        """Load the entire MPCData entry from a trajectory group."""
+        config = MPCConfig.from_hdf5(grp)
+        trajectory = MPCTrajectory.from_hdf5(grp)
+        meta = MPCMeta.from_hdf5(grp)
+        return cls(trajectory=trajectory, meta=meta, config=config)
 
 
 class MPCDataset:
@@ -874,7 +927,8 @@ class MPCDataset:
             global_exclusions = self._handle_global_config(f)
             start_idx = len([k for k in f.keys() if k.startswith("traj_")])
             for i, entry in enumerate(self.memory_buffer):
-                self._save_entry(f.create_group(f"traj_{start_idx + i}"), entry, global_exclusions, save_ocp_trajs)
+                grp = f.create_group(f"traj_{start_idx + i}")
+                entry.to_hdf5(grp, exclude=global_exclusions, save_ocp_traj=save_ocp_trajs)
 
         self._refresh_after_save(target_path)
 
@@ -899,18 +953,6 @@ class MPCDataset:
                 return common
 
         return {k: set() for k in ["attrs", "constraints", "model", "cost"]}
-
-    def _save_entry(self, grp: h5py.Group, entry: MPCData, exclusions: dict[str, set[str]], save_ocp: bool) -> None:
-        entry.config.to_hdf5(
-            grp,
-            exclude_attrs=exclusions["attrs"],
-            exclude_constraints=exclusions["constraints"],
-            exclude_model=exclusions["model"],
-            exclude_cost=exclusions["cost"],
-            group_name="config"
-        )
-        entry.trajectory.to_hdf5(grp, save_ocp)
-        entry.meta.to_hdf5(grp)
 
     def _get_field_map(self) -> dict[str, list[str]]:
         """Returns a mapping of config category to list of field names."""
@@ -1006,18 +1048,12 @@ class MPCDataset:
         if idx < len(self.memory_buffer):
             return self.memory_buffer[idx]
         
-        # Check File
         # Calculate index relative to the file content
         file_idx = idx - len(self.memory_buffer)
         key = self._indices[file_idx]
         grp = self._h5_file[key]
 
-        # This reads binary data from disk into RAM)
-        traj = MPCTrajectory.from_hdf5(grp)
-        meta = MPCMeta.from_hdf5(grp)
-        config = MPCConfig.from_hdf5(grp)
-
-        return MPCData(trajectory=traj, meta=meta, config=config)
+        return MPCData.from_hdf5(grp)
 
     def __iter__(self) -> Iterator[MPCData]:
         """
@@ -1026,70 +1062,6 @@ class MPCDataset:
         for i in range(len(self)):
             yield self[i]
 
-    def to_dataframe(self) -> pd.DataFrame:
-        """
-        Fast Filtering: Reads ONLY the metadata attributes (tiny), ignores arrays (huge).
-        """
-        rows = []
-        # From Memory
-        for i, entry in enumerate(self.memory_buffer):
-            row = {
-                "T_sim": int(entry.config.T_sim),
-                "N": int(entry.config.N),
-                "nx" : int(entry.config.nx),
-                "nu" : int(entry.config.nu),
-                "dt": float(entry.config.dt),
-            }
-            row.update(asdict(entry.meta))
-            row['original_index'] = i
-            row['source'] = 'mem'
-            rows.append(row)
-
-        # From File
-        for i, key in enumerate(self._indices):
-            grp = self._h5_file[key]
-            meta = MPCMeta.from_hdf5(grp)
-            row = {}
-            cfg_grp = grp.get("config", None)
-            global_cfg = self._h5_file.get("global_config", None)
-            base_attrs = global_cfg.attrs if global_cfg is not None else {}
-
-            row.update({
-                "T_sim": int(base_attrs.get("T_sim", 0)),
-                "N": int(base_attrs.get("N", 10)),
-                "nx": int(base_attrs.get("nx", 2)),
-                "nu": int(base_attrs.get("nu", 1)),
-                "dt": float(base_attrs.get("dt", 0.1)),
-            })
-
-            if cfg_grp is not None:
-                if "T_sim" in cfg_grp.attrs:
-                    row["T_sim"] = int(cfg_grp.attrs["T_sim"])
-                if "N" in cfg_grp.attrs:
-                    row["N"] = int(cfg_grp.attrs["N"])
-                if "nx" in cfg_grp.attrs:
-                    row["nx"] = int(cfg_grp.attrs["nx"])
-                if "nu" in cfg_grp.attrs:
-                    row["nu"] = int(cfg_grp.attrs["nu"])
-                if "dt" in cfg_grp.attrs:
-                    row["dt"] = float(cfg_grp.attrs["dt"])
-                
-            row.update(asdict(meta))
-            row['original_index'] = len(self.memory_buffer) + i
-            row['source'] = 'file'
-            rows.append(row)
-
-        return pd.DataFrame(rows)
-
-    def filter(self, query: str) -> 'MPCDataset':
-        """
-        Returns a NEW dataset instance containing only the indices that match.
-        """
-        df = self.to_dataframe()
-        filtered_indices = df.query(query)['original_index'].values.astype(int)
-        subset_data = [self[i] for i in filtered_indices]
-        return MPCDataset(data_buffer=subset_data)
-    
     def validate(
         self,
         x_bounds: NDArray | None = None,
