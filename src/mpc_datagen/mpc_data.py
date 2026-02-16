@@ -7,7 +7,7 @@ import pandas as pd
 from numpy.typing import NDArray
 from dataclasses import dataclass, field, asdict
 from collections.abc import Iterator
-from typing import Any, Generic, Protocol, TypeVar
+from typing import Any, Generic, Protocol, TypeVar, cast, overload
 from pathlib import Path
 
 from .linalg import weighted_quadratic_norm
@@ -49,6 +49,9 @@ def _values_equal(a, b) -> bool:
 
 
 # ==== Base Data and Dataset Classes ====
+TData = TypeVar("TData", bound="BaseData")
+TDataset = TypeVar("TDataset", bound="BaseDataset[Any]")
+
 class BaseData(Protocol):
     """Base data class with common functionality for MPCData and related structures."""
     def to_hdf5(self, grp: h5py.Group, **kwargs) -> None:
@@ -59,9 +62,6 @@ class BaseData(Protocol):
     def from_hdf5(cls, grp: h5py.Group):
         """Load the data from an HDF5 group. To be implemented by subclasses."""
         raise NotImplementedError("from_hdf5 method must be implemented by subclasses.")
-
-
-TData = TypeVar("TData", bound=BaseData)
 
 class BaseDataset(Generic[TData]):
     """Base datasets class with lazy loading and HDF5 support."""
@@ -124,11 +124,19 @@ class BaseDataset(Generic[TData]):
     def __len__(self) -> int:
         return len(self._indices) + len(self.memory_buffer)
 
-    def __getitem__(self, idx: int | slice) -> TData | "BaseDataset[TData]":
+    @overload
+    def __getitem__(self, idx: int) -> TData:
+        ...
+
+    @overload
+    def __getitem__(self: TDataset, idx: slice) -> TDataset:
+        ...
+
+    def __getitem__(self: TDataset, idx: int | slice) -> TData | TDataset:
         if isinstance(idx, slice):
             start, stop, step = idx.indices(len(self))
             subset_data = [self[i] for i in range(start, stop, step or 1)]
-            return self.__class__(data_buffer=subset_data)
+            return cast(TDataset, self.__class__(data_buffer=subset_data))
         idx = self._normalize_index(idx)
         
         # Check memory buffer first
@@ -179,15 +187,15 @@ class BaseDataset(Generic[TData]):
         self._refresh_after_save(target_path)
 
     @classmethod
-    def load(cls, path: Path) -> 'BaseDataset':
+    def load(cls: type[TDataset], path: Path) -> TDataset:
         """
         Lazy Load: Just opens the file, does NOT read data.
         """
         path = Path(path)
         if not path.exists():
             __logger__.warning(f"File {path} not found.")
-            return cls()
-        return cls(file_path=path)
+            return cast(TDataset, cls())
+        return cast(TDataset, cls(file_path=path))
 
     def close(self):
         if self._h5_file:
