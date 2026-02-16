@@ -1,11 +1,13 @@
 import json
 import h5py
+import os
 import numpy as np
 import pandas as pd
 
 from numpy.typing import NDArray
 from dataclasses import dataclass, field, asdict
 from collections.abc import Iterator
+from typing import Any, Generic, Protocol, TypeVar
 from pathlib import Path
 
 from .linalg import weighted_quadratic_norm
@@ -13,6 +15,8 @@ from .package_logger import get_package_logger
 
 __logger__ = get_package_logger(__name__)
 
+
+# ==== Utility Functions for Config Comparisons ====
 def _is_defined_array(arr: NDArray | None, not_zero: bool = True) -> bool:
     """Check if an array is defined and non-empty."""
     if arr is None:
@@ -43,6 +47,159 @@ def _values_equal(a, b) -> bool:
         return bool(np.isclose(a, b))
     return a == b
 
+
+# ==== Base Data and Dataset Classes ====
+class BaseData(Protocol):
+    """Base data class with common functionality for MPCData and related structures."""
+    def to_hdf5(self, grp: h5py.Group, **kwargs) -> None:
+        """Save the data to an HDF5 group. To be implemented by subclasses."""
+        raise NotImplementedError("to_hdf5 method must be implemented by subclasses.")
+
+    @classmethod
+    def from_hdf5(cls, grp: h5py.Group):
+        """Load the data from an HDF5 group. To be implemented by subclasses."""
+        raise NotImplementedError("from_hdf5 method must be implemented by subclasses.")
+
+
+TData = TypeVar("TData", bound=BaseData)
+
+class BaseDataset(Generic[TData]):
+    """Base datasets class with lazy loading and HDF5 support."""
+    DATA_CLS: type[TData] | None = None
+    DEFAULT_GRP_PREFIX = "_entry_"
+    
+    def __init__(
+        self,
+        file_path: str | None = None,
+        data_buffer: list[TData] | None = None,
+        grp_prefix: str | None = None,
+        data_cls: type[TData] | None = None,
+    ):
+        self.file_path = Path(file_path) if file_path else None
+        self.memory_buffer = data_buffer if data_buffer else []
+        self.grp_prefix = grp_prefix or self.DEFAULT_GRP_PREFIX
+        self.data_cls = data_cls or self.DATA_CLS
+        
+        self._h5_file = None
+        self._indices = []
+        
+        # Open file in read mode if it exists
+        if self.file_path and self.file_path.exists():
+            self._h5_file = h5py.File(self.file_path, 'r')
+            self._indices = self._collect_indices(self._h5_file)
+
+    def _extract_index(self, key: str) -> int:
+        try:
+            return int(key.rsplit('_', 1)[1])
+        except (IndexError, ValueError) as err:
+            raise ValueError(f"Invalid entry key format: '{key}'. Expected suffix '_<int>'.") from err
+
+    def _collect_indices(self, h5_file: h5py.File) -> list[str]:
+        return sorted(
+            [k for k in h5_file.keys() if k.startswith(self.grp_prefix)],
+            key=self._extract_index,
+        )
+
+    def _entry_group_name(self, idx: int) -> str:
+        return f"{self.grp_prefix}{idx}"
+
+    def _deserialize_entry(self, grp: h5py.Group) -> TData:
+        if self.data_cls is None:
+            raise TypeError(
+                "No data class configured for dataset deserialization. "
+                "Set DATA_CLS on the subclass or pass data_cls=... to BaseDataset."
+            )
+        return self.data_cls.from_hdf5(grp)
+
+    def _serialize_entry(self, entry: TData, grp: h5py.Group, **kwargs: Any) -> None:
+        entry.to_hdf5(grp, **kwargs)
+
+    def _normalize_index(self, idx: int) -> int:
+        if idx < 0:
+            idx += len(self)
+        if idx < 0 or idx >= len(self):
+            raise IndexError("Dataset index out of range")
+        return idx
+
+    def __len__(self) -> int:
+        return len(self._indices) + len(self.memory_buffer)
+
+    def __getitem__(self, idx: int | slice) -> TData | "BaseDataset[TData]":
+        if isinstance(idx, slice):
+            start, stop, step = idx.indices(len(self))
+            subset_data = [self[i] for i in range(start, stop, step or 1)]
+            return self.__class__(data_buffer=subset_data)
+        idx = self._normalize_index(idx)
+        
+        # Check memory buffer first
+        if idx < len(self.memory_buffer):
+            return self.memory_buffer[idx]
+        
+        # Calculate index relative to the file content
+        file_idx = idx - len(self.memory_buffer)
+        key = self._indices[file_idx]
+        grp = self._h5_file[key]
+
+        return self._deserialize_entry(grp)
+
+    def __iter__(self) -> Iterator[TData]:
+        """Explicit iterator to help static analysis tools infer the type of elements."""
+        for i in range(len(self)):
+            yield self[i]
+
+    def _refresh_after_save(self, path: Path) -> None:
+        self.memory_buffer = []
+        self.file_path = path
+        if self._h5_file: self._h5_file.close()
+        self._h5_file = h5py.File(self.file_path, 'r')
+        self._indices = self._collect_indices(self._h5_file)
+
+    def _save_entries(self, f: h5py.File, start_idx: int, **entry_kwargs: Any) -> None:
+        for i, entry in enumerate(self.memory_buffer):
+            grp = f.create_group(self._entry_group_name(start_idx + i))
+            self._serialize_entry(entry, grp, **entry_kwargs)
+
+    def _next_file_index(self, f: h5py.File) -> int:
+        return len([k for k in f.keys() if k.startswith(self.grp_prefix)])
+
+    def add(self, entry: TData):
+        """Add to temporary memory buffer (for generation phase)."""
+        self.memory_buffer.append(entry)
+        
+    def save(self, path: Path = None, mode: str = 'w', **entry_kwargs: Any) -> None:
+        """Flushes memory buffer to HDF5."""
+        target_path = Path(path) if path else self.file_path
+        if not target_path: raise ValueError("No path provided")
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with h5py.File(target_path, mode) as f:
+            start_idx = self._next_file_index(f)
+            self._save_entries(f, start_idx, **entry_kwargs)
+
+        self._refresh_after_save(target_path)
+
+    @classmethod
+    def load(cls, path: Path) -> 'BaseDataset':
+        """
+        Lazy Load: Just opens the file, does NOT read data.
+        """
+        path = Path(path)
+        if not path.exists():
+            __logger__.warning(f"File {path} not found.")
+            return cls()
+        return cls(file_path=path)
+
+    def close(self):
+        if self._h5_file:
+            self._h5_file.close()
+
+    def __del__(self):
+        self.close()
+
+
+# ======================================
+# ==== MPC-Specific Data Structures ====
+# ======================================
 @dataclass
 class MPCMeta:
     """Metadata regarding the MPC execution.
@@ -879,7 +1036,7 @@ class MPCData:
             exclude_cost=exclude["cost"] if exclude else set(),
             group_name="config"
         )
-        self.trajectory.to_hdf5(grp, save_ocp=save_ocp_traj)
+        self.trajectory.to_hdf5(grp, save_ocp_trajs=save_ocp_traj)
         self.meta.to_hdf5(grp)
 
     @classmethod
@@ -891,26 +1048,21 @@ class MPCData:
         return cls(trajectory=trajectory, meta=meta, config=config)
 
 
-class MPCDataset:
+
+# ============================================================================
+# Dataset classes with lazy loading and HDF5 support
+# ============================================================================
+class MPCDataset(BaseDataset[MPCData]):
     """
     True Lazy-Loading Dataset.
     - Holds a file handle (_h5_file) instead of a list of data.
     - Reads arrays from disk only when __getitem__ is called.
     """
-    def __init__(self, file_path: str | None = None, data_buffer: list[MPCData] = None):
-        self.file_path = Path(file_path) if file_path else None
-        self.memory_buffer = data_buffer if data_buffer else []
-        
-        self._h5_file = None
-        self._indices = [] # List of keys ['traj_0', 'traj_1', ...] in the file
-        
-        # Open file in read mode if it exists
-        if self.file_path and self.file_path.exists():
-            self._h5_file = h5py.File(self.file_path, 'r')
-            self._indices = sorted(
-                [k for k in self._h5_file.keys() if k.startswith("traj_")],
-                key=lambda x: int(x.split('_')[1])
-            )
+    DATA_CLS = MPCData
+    DEFAULT_GRP_PREFIX = "traj_"
+
+    def __init__(self, file_path: str | None = None, data_buffer: list[MPCData] | None = None):
+        super().__init__(file_path=file_path, data_buffer=data_buffer, grp_prefix=self.DEFAULT_GRP_PREFIX, data_cls=self.DATA_CLS)
 
     def add(self, entry: MPCData):
         """Add to temporary memory buffer (for generation phase)."""
@@ -925,22 +1077,15 @@ class MPCDataset:
 
         with h5py.File(target_path, mode) as f:
             global_exclusions = self._handle_global_config(f)
-            start_idx = len([k for k in f.keys() if k.startswith("traj_")])
-            for i, entry in enumerate(self.memory_buffer):
-                grp = f.create_group(f"traj_{start_idx + i}")
-                entry.to_hdf5(grp, exclude=global_exclusions, save_ocp_traj=save_ocp_trajs)
+            start_idx = self._next_file_index(f)
+            self._save_entries(
+                f,
+                start_idx,
+                exclude=global_exclusions,
+                save_ocp_traj=save_ocp_trajs,
+            )
 
         self._refresh_after_save(target_path)
-
-    def _refresh_after_save(self, path: Path) -> None:
-        self.memory_buffer = []
-        self.file_path = path
-        if self._h5_file: self._h5_file.close()
-        self._h5_file = h5py.File(self.file_path, 'r')
-        self._indices = sorted(
-            [k for k in self._h5_file.keys() if k.startswith("traj_")],
-            key=lambda x: int(x.split('_')[1])
-        )
 
     def _handle_global_config(self, f: h5py.File) -> dict[str, set[str]]:
         if "global_config" in f:
@@ -1016,51 +1161,6 @@ class MPCDataset:
             exclude_cost=exclusions["cost"],
             group_name="global_config"
         )
-
-
-    @classmethod
-    def load(cls, path: Path) -> 'MPCDataset':
-        """
-        Lazy Load: Just opens the file, does NOT read data.
-        """
-        path = Path(path)
-        if not path.exists():
-            __logger__.warning(f"File {path} not found.")
-            return cls()
-        return cls(file_path=path)
-
-    def __len__(self) -> int:
-        return len(self.memory_buffer) + len(self._indices)
-
-    def __getitem__(self, idx):
-        """
-        Reads from disk on-demand.
-        Supports both integer indexing and slicing.
-        """
-        # Handle slice objects
-        if isinstance(idx, slice):
-            start, stop, step = idx.indices(len(self))
-            subset_data = [self[i] for i in range(start, stop, step or 1)]
-            return MPCDataset(data_buffer=subset_data)
-        
-        # Handle integer indexing
-        # Check memory buffer first
-        if idx < len(self.memory_buffer):
-            return self.memory_buffer[idx]
-        
-        # Calculate index relative to the file content
-        file_idx = idx - len(self.memory_buffer)
-        key = self._indices[file_idx]
-        grp = self._h5_file[key]
-
-        return MPCData.from_hdf5(grp)
-
-    def __iter__(self) -> Iterator[MPCData]:
-        """
-        Explicit iterator to help static analysis tools infer the type of elements.
-        """
-        for i in range(len(self)):
-            yield self[i]
 
     def validate(
         self,
@@ -1183,8 +1283,3 @@ class MPCDataset:
         
         return df
     
-    def close(self):
-        if self._h5_file: self._h5_file.close()
-
-    def __del__(self):
-        self.close()
