@@ -6,7 +6,7 @@ import pandas as pd
 
 from numpy.typing import NDArray
 from dataclasses import dataclass, field, asdict
-from collections.abc import Iterator
+from collections.abc import Iterator, Iterable
 from typing import Any, Generic, Protocol, TypeVar, cast, overload
 from pathlib import Path
 
@@ -827,23 +827,61 @@ class MPCTrajectory:
             
         # Total unscaled costs
         self.V_N = self.V_horizon.sum(axis=1)
-
-    @classmethod
-    def from_hdf5(cls, grp: h5py.Group) -> "MPCTrajectory":
-        """Load trajectory arrays from a trajectory group."""
+    
+    @staticmethod
+    def _get_traj_grp(grp: h5py.Group) -> h5py.Group:
         traj_grp = grp.get("trajectory", None)
         if traj_grp is None:
             raise ValueError("No 'trajectory' group found in the provided HDF5 group.")
-        
+        return traj_grp
+
+    @classmethod
+    def from_hdf5(cls, grp: h5py.Group, fields: Iterable[str] | None = None) -> "MPCTrajectory":
+        """Load trajectory arrays from a trajectory group.
+
+        Parameters
+        ----------
+        grp : h5py.Group
+            HDF5 group containing a ``trajectory`` subgroup.
+        fields : iterable of str, optional
+            Field names to load selectively. If ``None`` (default), all fields
+            are loaded. Non-requested fields are returned as empty arrays
+            (required fields) or ``None`` (optional fields).
+        """
+        traj_grp = cls._get_traj_grp(grp)
+
+        valid_fields = set(cls.__dataclass_fields__.keys())
+        requested = None if fields is None else set(fields)
+        if requested is not None:
+            unknown = requested - valid_fields
+            if unknown:
+                raise ValueError(f"Unknown trajectory field(s): {sorted(unknown)}")
+
+        def _wants(name: str) -> bool:
+            return requested is None or name in requested
+
+        states = traj_grp["states"][:, :] if _wants("states") and "states" in traj_grp else np.empty((0, 0))
+        inputs = traj_grp["inputs"][:, :] if _wants("inputs") and "inputs" in traj_grp else np.empty((0, 0))
+        times = traj_grp["times"][:] if _wants("times") and "times" in traj_grp else np.empty((0,))
+        V_solver = traj_grp["V_solver"][:] if _wants("V_solver") and "V_solver" in traj_grp else np.empty((0,))
+
         return cls(
-            states=traj_grp["states"][:, :],
-            inputs=traj_grp["inputs"][:, :],
-            times=traj_grp["times"][:],
-            V_solver=traj_grp["V_solver"][:],
-            V_N=traj_grp["V_N"][:] if "V_N" in traj_grp else None,
-            V_horizon=traj_grp["V_horizon"][:, :] if "V_horizon" in traj_grp else None,
-            predicted_states=traj_grp["predicted_states"][:, :, :] if "predicted_states" in traj_grp else None,
-            predicted_inputs=traj_grp["predicted_inputs"][:, :, :] if "predicted_inputs" in traj_grp else None,
+            states=states,
+            inputs=inputs,
+            times=times,
+            V_solver=V_solver,
+            V_N=traj_grp["V_N"][:] if _wants("V_N") and "V_N" in traj_grp else None,
+            V_horizon=traj_grp["V_horizon"][:, :] if _wants("V_horizon") and "V_horizon" in traj_grp else None,
+            predicted_states=(
+                traj_grp["predicted_states"][:, :, :]
+                if _wants("predicted_states") and "predicted_states" in traj_grp
+                else None
+            ),
+            predicted_inputs=(
+                traj_grp["predicted_inputs"][:, :, :]
+                if _wants("predicted_inputs") and "predicted_inputs" in traj_grp
+                else None
+            ),
         )
 
     def to_hdf5(self, grp: h5py.Group, save_ocp_trajs: bool = True) -> None:
