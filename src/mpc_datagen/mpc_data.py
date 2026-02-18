@@ -272,17 +272,31 @@ class LinearSystem:
     gd: NDArray = field(default_factory=lambda: np.array([[]]))
 
     @classmethod
-    def from_hdf5(cls, grp: h5py.Group) -> "LinearSystem":
+    def from_hdf5(cls, grp: h5py.Group, overwrite_grp: h5py.Group | None = None) -> "LinearSystem":
         """Load linear system matrices from a trajectory group (expects a `linear_system` subgroup)."""
-        lin_sys_grp = grp.get("linear_system", None)
-        if lin_sys_grp is None:
+        name = "linear_system"
+        sys_grp = grp.get(name, None)
+        if sys_grp is None:
             return cls()
 
-        return cls(
-            A=lin_sys_grp["A"][:] if "A" in lin_sys_grp else np.array([]),
-            B=lin_sys_grp["B"][:] if "B" in lin_sys_grp else np.array([]),
-            gd=lin_sys_grp["gd"][:] if "gd" in lin_sys_grp else np.array([]),
+        sys = cls(
+            A=sys_grp["A"][:] if "A" in sys_grp else np.array([]),
+            B=sys_grp["B"][:] if "B" in sys_grp else np.array([]),
+            gd=sys_grp["gd"][:] if "gd" in sys_grp else np.array([]),
         )
+        
+        if overwrite_grp is None:
+            return sys
+
+        overwrite_sys_grp = overwrite_grp.get(name, None)
+        if overwrite_sys_grp is not None:
+            if "A" in overwrite_sys_grp:
+                sys.A = overwrite_sys_grp["A"][:]
+            if "B" in overwrite_sys_grp:
+                sys.B = overwrite_sys_grp["B"][:]
+            if "gd" in overwrite_sys_grp:
+                sys.gd = overwrite_sys_grp["gd"][:]
+        return sys
 
     def to_hdf5(self, grp: h5py.Group, exclude_fields: set | None = None) -> None:
         """Save linear system matrices to a trajectory group (creates a `linear_system` subgroup)."""
@@ -385,13 +399,13 @@ class LinearLSCost:
         return _is_defined_array(self.Vx_e, not_zero=True) and _is_defined_array(self.W_e, not_zero=True)
 
     @classmethod
-    def from_hdf5(cls, grp: h5py.Group) -> "LinearLSCost":
+    def from_hdf5(cls, grp: h5py.Group, overwrite_grp: h5py.Group | None = None) -> "LinearLSCost":
         """Load cost matrices from a trajectory group (expects a `cost` subgroup)."""
         cost_grp = grp.get("cost", None)
         if cost_grp is None:
             return cls()
 
-        return cls(
+        cost = cls(
             Vx=cost_grp["Vx"][:] if "Vx" in cost_grp else np.array([]),
             Vu=cost_grp["Vu"][:] if "Vu" in cost_grp else np.array([]),
             W=cost_grp["W"][:] if "W" in cost_grp else np.array([]),
@@ -402,6 +416,31 @@ class LinearLSCost:
             stage_scale=cost_grp.attrs.get("stage_scale", 1.0),
             terminal_scale=cost_grp.attrs.get("terminal_scale", 1.0),
         )
+        
+        if overwrite_grp is None:
+            return cost
+
+        overwrite_cost_grp = overwrite_grp.get("cost", None)
+        if overwrite_cost_grp is not None:
+            if "Vx" in overwrite_cost_grp:
+                cost.Vx = overwrite_cost_grp["Vx"][:]
+            if "Vu" in overwrite_cost_grp:
+                cost.Vu = overwrite_cost_grp["Vu"][:]
+            if "W" in overwrite_cost_grp:
+                cost.W = overwrite_cost_grp["W"][:]
+            if "yref" in overwrite_cost_grp:
+                cost.yref = overwrite_cost_grp["yref"][:]
+            if "Vx_e" in overwrite_cost_grp:
+                cost.Vx_e = overwrite_cost_grp["Vx_e"][:]
+            if "W_e" in overwrite_cost_grp:
+                cost.W_e = overwrite_cost_grp["W_e"][:]
+            if "yref_e" in overwrite_cost_grp:
+                cost.yref_e = overwrite_cost_grp["yref_e"][:]
+            if "stage_scale" in overwrite_cost_grp.attrs:
+                cost.stage_scale = float(overwrite_cost_grp.attrs["stage_scale"])
+            if "terminal_scale" in overwrite_cost_grp.attrs:
+                cost.terminal_scale = float(overwrite_cost_grp.attrs["terminal_scale"])
+        return cost
 
     def to_hdf5(self, grp: h5py.Group, exclude_fields: set | None = None) -> None:
         """Save cost matrices to a trajectory group (creates a `cost` subgroup)."""
@@ -495,13 +534,13 @@ class Constraints:
         return np.all(u >= self.lbu) and np.all(u <= self.ubu)
 
     @classmethod
-    def from_hdf5(cls, grp: h5py.Group) -> "Constraints":
+    def from_hdf5(cls, grp: h5py.Group, overwrite_grp: h5py.Group | None = None) -> "Constraints":
         """Load constraints from a trajectory group (expects a `constraints` subgroup)."""
         cons_grp = grp.get("constraints", None)
         if cons_grp is None:
             return cls()
 
-        return cls(
+        cons = cls(
             x0=cons_grp["x0"][:] if "x0" in cons_grp else np.array([]),
             lbx=cons_grp["lbx"][:] if "lbx" in cons_grp else np.array([]),
             ubx=cons_grp["ubx"][:] if "ubx" in cons_grp else np.array([]),
@@ -510,6 +549,27 @@ class Constraints:
             lbx_e=cons_grp["lbx_e"][:] if "lbx_e" in cons_grp else np.array([]),
             ubx_e=cons_grp["ubx_e"][:] if "ubx_e" in cons_grp else np.array([]),
         )
+
+        if overwrite_grp is None:
+            return cons
+        
+        overwrite_cons_grp = overwrite_grp.get("constraints", None)
+        if overwrite_cons_grp is not None:
+            if "x0" in overwrite_cons_grp:
+                cons.x0 = overwrite_cons_grp["x0"][:]
+            if "lbx" in overwrite_cons_grp:
+                cons.lbx = overwrite_cons_grp["lbx"][:]
+            if "ubx" in overwrite_cons_grp:
+                cons.ubx = overwrite_cons_grp["ubx"][:]
+            if "lbu" in overwrite_cons_grp:
+                cons.lbu = overwrite_cons_grp["lbu"][:]
+            if "ubu" in overwrite_cons_grp:
+                cons.ubu = overwrite_cons_grp["ubu"][:]
+            if "lbx_e" in overwrite_cons_grp:
+                cons.lbx_e = overwrite_cons_grp["lbx_e"][:]
+            if "ubx_e" in overwrite_cons_grp:
+                cons.ubx_e = overwrite_cons_grp["ubx_e"][:]
+        return cons
 
     def to_hdf5(self, grp: h5py.Group, exclude_fields: set | None = None) -> None:
         """Save constraints to a trajectory group (creates a `constraints` subgroup)."""
@@ -565,91 +625,59 @@ class MPCConfig:
     model: LinearSystem = field(default_factory=LinearSystem)
     cost: LinearLSCost = field(default_factory=LinearLSCost)
 
+    @staticmethod
+    def _get_local_cfg_grp(grp: h5py.Group) -> h5py.Group:
+        """Helper method to get the config group from either local or global scope."""
+        if grp.file is None:
+            raise ValueError("Provided HDF5 group has no associated file.")
+        cfg_local = grp.get("config", None)
+        if cfg_local is None:
+            return None
+        return cfg_local
+    
+    @staticmethod
+    def _get_global_cfg_grp(grp: h5py.Group) -> h5py.Group:
+        """Helper method to get the global config group from the file."""
+        if grp.file is None:
+            raise ValueError("Provided HDF5 group has no associated file.")
+        cfg_global = grp.file.get("global_config", None)
+        if cfg_global is None:
+            raise ValueError("No 'global_config' group found in the HDF5 file.")
+        return cfg_global
+    
     @classmethod
     def from_hdf5(cls, grp: h5py.Group) -> "MPCConfig":
         """Load config from a trajectory group, merging optional global config if present."""
-        cfg_local = grp.get("config", None)
-        cfg_global = grp.file.get("global_config", None) if grp.file is not None else None
-
-        if cfg_local is None and cfg_global is None:
-            raise ValueError("No 'config' group found in the provided HDF5 group.")
+        cfg_local = cls._get_local_cfg_grp(grp)
+        cfg_global = cls._get_global_cfg_grp(grp)
 
         base_grp = cfg_global if cfg_global is not None else cfg_local
+        overwrite_grp = cfg_local if cfg_local is not None else None
         cfg = cls(
             T_sim=int(base_grp.attrs.get("T_sim", 0)),
             N=int(base_grp.attrs.get("N", 10)),
             nx=int(base_grp.attrs.get("nx", 2)),
             nu=int(base_grp.attrs.get("nu", 1)),
             dt=float(base_grp.attrs.get("dt", 0.1)),
-            constraints=Constraints.from_hdf5(base_grp),
-            model=LinearSystem.from_hdf5(base_grp),
-            cost=LinearLSCost.from_hdf5(base_grp),
+            constraints=Constraints.from_hdf5(base_grp, overwrite_grp=overwrite_grp),
+            model=LinearSystem.from_hdf5(base_grp, overwrite_grp=overwrite_grp),
+            cost=LinearLSCost.from_hdf5(base_grp, overwrite_grp=overwrite_grp),
         )
 
-        if cfg_local is None or cfg_local is base_grp:
+        if overwrite_grp is None:
             return cfg
 
         # Override scalars if present locally
-        if "T_sim" in cfg_local.attrs:
-            cfg.T_sim = int(cfg_local.attrs["T_sim"])
-        if "N" in cfg_local.attrs:
-            cfg.N = int(cfg_local.attrs["N"])
-        if "nx" in cfg_local.attrs:
-            cfg.nx = int(cfg_local.attrs["nx"])
-        if "nu" in cfg_local.attrs:
-            cfg.nu = int(cfg_local.attrs["nu"])
-        if "dt" in cfg_local.attrs:
-            cfg.dt = float(cfg_local.attrs["dt"])
-
-        # Override constraints if present locally
-        local_cons = cfg_local.get("constraints", None)
-        if local_cons is not None:
-            if "x0" in local_cons:
-                cfg.constraints.x0 = local_cons["x0"][:]
-            if "lbx" in local_cons:
-                cfg.constraints.lbx = local_cons["lbx"][:]
-            if "ubx" in local_cons:
-                cfg.constraints.ubx = local_cons["ubx"][:]
-            if "lbu" in local_cons:
-                cfg.constraints.lbu = local_cons["lbu"][:]
-            if "ubu" in local_cons:
-                cfg.constraints.ubu = local_cons["ubu"][:]
-            if "lbx_e" in local_cons:
-                cfg.constraints.lbx_e = local_cons["lbx_e"][:]
-            if "ubx_e" in local_cons:
-                cfg.constraints.ubx_e = local_cons["ubx_e"][:]
-
-        # Override model if present locally
-        local_model = cfg_local.get("linear_system", None)
-        if local_model is not None:
-            if "A" in local_model:
-                cfg.model.A = local_model["A"][:]
-            if "B" in local_model:
-                cfg.model.B = local_model["B"][:]
-            if "gd" in local_model:
-                cfg.model.gd = local_model["gd"][:]
-
-        # Override cost if present locally
-        local_cost = cfg_local.get("cost", None)
-        if local_cost is not None:
-            if "Vx" in local_cost:
-                cfg.cost.Vx = local_cost["Vx"][:]
-            if "Vu" in local_cost:
-                cfg.cost.Vu = local_cost["Vu"][:]
-            if "W" in local_cost:
-                cfg.cost.W = local_cost["W"][:]
-            if "yref" in local_cost:
-                cfg.cost.yref = local_cost["yref"][:]
-            if "Vx_e" in local_cost:
-                cfg.cost.Vx_e = local_cost["Vx_e"][:]
-            if "W_e" in local_cost:
-                cfg.cost.W_e = local_cost["W_e"][:]
-            if "yref_e" in local_cost:
-                cfg.cost.yref_e = local_cost["yref_e"][:]
-            if "stage_scale" in local_cost.attrs:
-                cfg.cost.stage_scale = float(local_cost.attrs["stage_scale"])
-            if "terminal_scale" in local_cost.attrs:
-                cfg.cost.terminal_scale = float(local_cost.attrs["terminal_scale"])
+        if "T_sim" in overwrite_grp.attrs:
+            cfg.T_sim = int(overwrite_grp.attrs["T_sim"])
+        if "N" in overwrite_grp.attrs:
+            cfg.N = int(overwrite_grp.attrs["N"])
+        if "nx" in overwrite_grp.attrs:
+            cfg.nx = int(overwrite_grp.attrs["nx"])
+        if "nu" in overwrite_grp.attrs:
+            cfg.nu = int(overwrite_grp.attrs["nu"])
+        if "dt" in overwrite_grp.attrs:
+            cfg.dt = float(overwrite_grp.attrs["dt"])
 
         return cfg
 
