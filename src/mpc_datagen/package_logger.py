@@ -1,4 +1,5 @@
 import logging
+import os
 import sys
 from typing import Any, Iterator
 import tqdm as tqdm_module
@@ -111,6 +112,47 @@ class PackageLogger:
         logger.addHandler(handler)
 
         return logger
+
+    @staticmethod
+    @contextmanager
+    def suppress_native_output(
+        suppress_stdout: bool = True,
+        suppress_stderr: bool = False,
+    ) -> Iterator[None]:
+        """Temporarily suppress native writes to file descriptors 1/2.
+
+        This is useful for C/C++ extension output (e.g., acados solver prints)
+        that bypasses Python's ``logging`` module.
+
+        Parameters
+        ----------
+        suppress_stdout : bool, optional
+            If True, redirects OS-level stdout (fd=1) to ``os.devnull``.
+        suppress_stderr : bool, optional
+            If True, redirects OS-level stderr (fd=2) to ``os.devnull``.
+        """
+        if not suppress_stdout and not suppress_stderr:
+            yield
+            return
+
+        devnull_fd = os.open(os.devnull, os.O_WRONLY)
+        saved_fds: dict[int, int] = {}
+
+        try:
+            if suppress_stdout:
+                saved_fds[1] = os.dup(1)
+                os.dup2(devnull_fd, 1)
+
+            if suppress_stderr:
+                saved_fds[2] = os.dup(2)
+                os.dup2(devnull_fd, 2)
+
+            yield
+        finally:
+            for target_fd, saved_fd in saved_fds.items():
+                os.dup2(saved_fd, target_fd)
+                os.close(saved_fd)
+            os.close(devnull_fd)
 
 
 class PackageBoundLogger(logging.LoggerAdapter):

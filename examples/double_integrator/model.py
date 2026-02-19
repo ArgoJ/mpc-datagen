@@ -200,7 +200,6 @@ if __name__ == "__main__":
     Q = np.diag([15.0, 1.0])
     R = np.diag([0.1])
 
-    x0_bounds=np.array([0.8, 1.0])
     T_sim=40
     n_samples=20000
     bounds_scale=10.0
@@ -227,11 +226,9 @@ if __name__ == "__main__":
             terminal_box_halfwidth=terminal_box_halfwidth,
         )
 
-        sampler = Sampler(
-            bound_type=BoundType.PERCENTAGE,
-            bounds=x0_bounds,
+        sampler = UniqueBoundedSampler(
+            bounds=np.array([solver.acados_ocp.constraints.lbx, solver.acados_ocp.constraints.ubx]),
             min_dist=np.array([1e-2, 1e-3]),
-            max_tries=1000,
             seed=4597525,
         )
         eps_cfg = EpsBandConfig(

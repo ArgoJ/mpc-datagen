@@ -2,9 +2,8 @@
 from .generation import (
     MPCDataGenerator,
     EpsBandConfig,
-    Sampler,
-    SamplerBase,
-    BoundType
+    UniqueBoundedSampler,
+    SamplerBase
 )
 
 # Data structures
@@ -42,9 +41,8 @@ __all__ = [
 
     # Generation
     "MPCDataGenerator",
-    "Sampler",
+    "UniqueBoundedSampler",
     "SamplerBase",
-    "BoundType",
 
     # Submodules
     "mdg_linalg",

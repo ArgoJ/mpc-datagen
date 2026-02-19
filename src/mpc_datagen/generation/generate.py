@@ -1,9 +1,11 @@
+import numpy as np
+
 from numpy.typing import NDArray
 from acados_template import AcadosOcpSolver
 from dataclasses import replace
 
 from .mpc_solve import solve_mpc_closed_loop, EpsBandConfig
-from .sampler import Sampler, SamplerBase
+from .sampler import UniqueBoundedSampler, SamplerBase
 from ..extractor import MPCConfigExtractor
 from ..mpc_data import MPCDataset
 from ..package_logger import get_package_logger
@@ -47,9 +49,11 @@ class MPCDataGenerator:
         self.mpc_config.T_sim = T_sim
 
         if sampler is None:
-            sampler = Sampler()
+            default_bounds = np.stack(
+                (self.mpc_config.constraints.lbx, self.mpc_config.constraints.ubx),
+                axis=0)
+            sampler = UniqueBoundedSampler(bounds=default_bounds)
         self.sampler = sampler
-        self.sampler.post_init_cfg(self.mpc_config)
 
     def generate(self, n_samples: int) -> MPCDataset:
         """

@@ -6,7 +6,7 @@ from numpy.typing import NDArray
 from acados_template import AcadosOcpSolver, AcadosSimSolver
 from dataclasses import dataclass
 
-from ..package_logger import get_package_logger
+from ..package_logger import PackageLogger, get_package_logger
 from ..mpc_data import MPCData, MPCTrajectory, MPCMeta, MPCConfig
 from ..extractor import MPCConfigExtractor
 
@@ -123,7 +123,8 @@ def solve_mpc_closed_loop(
         solver.set(0, "lbx", current_x)
         solver.set(0, "ubx", current_x)
         
-        status = solver.solve()
+        with PackageLogger.suppress_native_output(suppress_stdout=True, suppress_stderr=False):
+            status = solver.solve()
         status_codes.append(status)
 
         if status not in (0, 5):
@@ -166,7 +167,8 @@ def solve_mpc_closed_loop(
             integrator.set("x", current_x)
             integrator.set("u", u_applied)
             
-            status_sim = integrator.solve()
+            with PackageLogger.suppress_native_output(suppress_stdout=True, suppress_stderr=False):
+                status_sim = integrator.solve()
             if status_sim != 0:
                 __logger__.debug(f"Integrator failed at step {i} with status {status_sim}")
             
