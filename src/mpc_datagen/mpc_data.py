@@ -644,6 +644,26 @@ class MPCConfig:
         if cfg_global is None:
             raise ValueError("No 'global_config' group found in the HDF5 file.")
         return cfg_global
+
+    @classmethod
+    def load_global(cls, h5_file: h5py.File | h5py.Group) -> "MPCConfig":
+        """Load the global configuration from the HDF5 file, regardless of whether a group or file is passed."""
+        root = h5_file.file if isinstance(h5_file, h5py.Group) else h5_file
+        
+        cfg_global = root.get("global_config")
+        if cfg_global is None:
+            raise ValueError("No 'global_config' group found in the HDF5 file.")
+
+        return cls(
+            T_sim=int(cfg_global.attrs.get("T_sim", 0)),
+            N=int(cfg_global.attrs.get("N", 10)),
+            nx=int(cfg_global.attrs.get("nx", 2)),
+            nu=int(cfg_global.attrs.get("nu", 1)),
+            dt=float(cfg_global.attrs.get("dt", 0.1)),
+            constraints=Constraints.from_hdf5(cfg_global),
+            model=LinearSystem.from_hdf5(cfg_global),
+            cost=LinearLSCost.from_hdf5(cfg_global),
+        )
     
     @classmethod
     def from_hdf5(cls, grp: h5py.Group) -> "MPCConfig":
@@ -1235,6 +1255,11 @@ class MPCDataset(BaseDataset[MPCData]):
             exclude_cost=exclusions["cost"],
             group_name="global_config"
         )
+
+    @property
+    def global_config(self) -> MPCConfig:
+        """Returns the global configuration if available, otherwise raises an error."""
+        return MPCConfig.load_global(self._h5_file)
 
     def validate(
         self,
