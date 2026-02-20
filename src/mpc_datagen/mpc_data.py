@@ -625,6 +625,82 @@ class MPCConfig:
     model: LinearSystem = field(default_factory=LinearSystem)
     cost: LinearLSCost = field(default_factory=LinearLSCost)
 
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize the configuration to a plain Python dictionary."""
+        def _to_plain(value: Any) -> Any:
+            if isinstance(value, np.ndarray):
+                return value.tolist()
+            if isinstance(value, dict):
+                return {k: _to_plain(v) for k, v in value.items()}
+            if isinstance(value, list):
+                return [_to_plain(v) for v in value]
+            return value
+
+        return cast(dict[str, Any], _to_plain(asdict(self)))
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "MPCConfig":
+        """Create an ``MPCConfig`` instance from a dictionary."""
+        if not isinstance(data, dict):
+            raise TypeError(f"Expected 'data' to be dict, got {type(data).__name__}.")
+
+        def _as_subdict(value: Any, name: str) -> dict[str, Any]:
+            if value is None:
+                return {}
+            if not isinstance(value, dict):
+                raise TypeError(f"Expected '{name}' to be dict, got {type(value).__name__}.")
+            return value
+
+        def _coerce_array_dataclass(
+            dataclass_type: type[Constraints] | type[LinearSystem],
+            values: dict[str, Any],
+            defaults_obj: Constraints | LinearSystem,
+        ) -> Constraints | LinearSystem:
+            converted: dict[str, NDArray] = {}
+            for name in dataclass_type.__dataclass_fields__.keys():
+                value = values.get(name, getattr(defaults_obj, name))
+                if value is None:
+                    value = getattr(defaults_obj, name)
+                converted[name] = np.asarray(value).copy()
+            return dataclass_type(**converted)
+
+        defaults = cls()
+        constraints_data = _as_subdict(data.get("constraints", {}), "constraints")
+        model_data = _as_subdict(data.get("model", {}), "model")
+        cost_data = _as_subdict(data.get("cost", {}), "cost")
+        cost_array_fields = [
+            name
+            for name in LinearLSCost.__dataclass_fields__.keys()
+            if name not in {"stage_scale", "terminal_scale"}
+        ]
+        cost_arrays: dict[str, NDArray] = {}
+        for name in cost_array_fields:
+            value = cost_data.get(name, getattr(defaults.cost, name))
+            if value is None:
+                value = getattr(defaults.cost, name)
+            cost_arrays[name] = np.asarray(value).copy()
+
+        return cls(
+            T_sim=int(data.get("T_sim", defaults.T_sim)),
+            N=int(data.get("N", defaults.N)),
+            nx=int(data.get("nx", defaults.nx)),
+            nu=int(data.get("nu", defaults.nu)),
+            dt=float(data.get("dt", defaults.dt)),
+            constraints=cast(
+                Constraints,
+                _coerce_array_dataclass(Constraints, constraints_data, defaults.constraints),
+            ),
+            model=cast(
+                LinearSystem,
+                _coerce_array_dataclass(LinearSystem, model_data, defaults.model),
+            ),
+            cost=LinearLSCost(
+                **cost_arrays,
+                stage_scale=float(cost_data.get("stage_scale", defaults.cost.stage_scale)),
+                terminal_scale=float(cost_data.get("terminal_scale", defaults.cost.terminal_scale)),
+            ),
+        )
+
     @staticmethod
     def _get_local_cfg_grp(grp: h5py.Group) -> h5py.Group:
         """Helper method to get the config group from either local or global scope."""
