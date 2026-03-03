@@ -125,14 +125,14 @@ class BaseDataset(Generic[TData]):
         return len(self._indices) + len(self.memory_buffer)
 
     @overload
-    def __getitem__(self, idx: int) -> TData:
+    def __getgrp__(self, idx: int) -> TData:
         ...
 
     @overload
-    def __getitem__(self: TDataset, idx: slice) -> TDataset:
+    def __getgrp__(self: TDataset, idx: slice) -> TDataset:
         ...
 
-    def __getitem__(self: TDataset, idx: int | slice) -> TData | TDataset:
+    def __getgrp__(self: TDataset, idx: int | slice) -> TData | TDataset:
         if isinstance(idx, slice):
             start, stop, step = idx.indices(len(self))
             subset_data = [self[i] for i in range(start, stop, step or 1)]
@@ -148,6 +148,20 @@ class BaseDataset(Generic[TData]):
         key = self._indices[file_idx]
         grp = self._h5_file[key]
 
+        return grp
+
+    @overload
+    def __getitem__(self, idx: int) -> TData:
+        ...
+
+    @overload
+    def __getitem__(self: TDataset, idx: slice) -> TDataset:
+        ...
+
+    def __getitem__(self: TDataset, idx: int | slice) -> TData | TDataset:
+        grp = self.__getgrp__(idx)
+        if not isinstance(grp, h5py.Group):
+            raise TypeError(f"Expected an HDF5 group from __getgrp__, got {type(grp)}")
         return self._deserialize_entry(grp)
 
     def __iter__(self) -> Iterator[TData]:
