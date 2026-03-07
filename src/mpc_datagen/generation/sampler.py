@@ -4,7 +4,7 @@ from numpy.typing import NDArray
 from abc import ABC
 from dataclasses import dataclass, field
 
-from ..package_logger import get_package_logger
+from pkg_logger import get_package_logger
 
 __logger__ = get_package_logger(__name__)
 

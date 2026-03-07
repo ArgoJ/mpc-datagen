@@ -24,7 +24,7 @@ from . import plots as mdg_plt
 from . import extractor as mdg_extractor
 
 # Logger
-from .package_logger import PackageLogger
+from pkg_logger import PackageLogger
 logger = PackageLogger.setup()
 
 __all__ = [

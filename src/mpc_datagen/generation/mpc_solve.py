@@ -6,7 +6,7 @@ from numpy.typing import NDArray
 from acados_template import AcadosOcpSolver, AcadosSimSolver
 from dataclasses import dataclass
 
-from ..package_logger import PackageLogger, get_package_logger
+from pkg_logger import PackageLogger, get_package_logger
 from ..mpc_data import MPCData, MPCTrajectory, MPCMeta, MPCConfig
 from ..extractor import MPCConfigExtractor
 

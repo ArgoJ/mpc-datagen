@@ -8,7 +8,7 @@ from .reports import *
 from .gruene import grune_required_horizon_and_alpha
 from ..extractor import MPCConfigExtractor, LinearSystemExtractor
 from ..mpc_data import MPCData, MPCDataset, MPCConfig, MPCMeta, MPCTrajectory, LinearSystem
-from ..package_logger import get_package_logger
+from pkg_logger import get_package_logger
 
 
 __logger__ = get_package_logger(__name__)

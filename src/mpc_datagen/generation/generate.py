@@ -8,7 +8,7 @@ from .mpc_solve import solve_mpc_closed_loop, EpsBandConfig
 from .sampler import UniqueBoundedSampler, SamplerBase
 from ..extractor import MPCConfigExtractor
 from ..mpc_data import MPCDataset
-from ..package_logger import get_package_logger
+from pkg_logger import get_package_logger
 
 __logger__ = get_package_logger(__name__)
 

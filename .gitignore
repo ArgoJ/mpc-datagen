@@ -216,5 +216,4 @@ __marimo__/
 *.hdf5
 data/*
 plots/*
-.vscode/browse*
-.vscode/c_cpp_properties.json
+.vscode/**

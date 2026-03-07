@@ -4,7 +4,7 @@ import scipy.linalg as sla
 from numpy.typing import NDArray
 
 from ..mpc_data import MPCConfig
-from ..package_logger import get_package_logger
+from pkg_logger import get_package_logger
 from ..extractor import extract_QR
 from ..linalg import sym
 

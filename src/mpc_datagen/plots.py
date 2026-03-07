@@ -7,7 +7,7 @@ from plotly.subplots import make_subplots
 from collections.abc import Callable
 
 from .mpc_data import MPCDataset
-from .package_logger import get_package_logger
+from pkg_logger import get_package_logger
 
 __logger__ = get_package_logger(__name__)
 

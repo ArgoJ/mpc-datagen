@@ -11,7 +11,7 @@ from typing import Any, Generic, Protocol, TypeVar, cast, overload
 from pathlib import Path
 
 from .linalg import weighted_quadratic_norm
-from .package_logger import get_package_logger
+from pkg_logger import get_package_logger
 
 __logger__ = get_package_logger(__name__)
 

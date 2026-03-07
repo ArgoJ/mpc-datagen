@@ -15,7 +15,8 @@ dependencies = [
     "tqdm",
     "casadi",
     "h5py",
-    "rich"
+    "rich",
+    "pkg-logger",
 ]
 
 [tool.setuptools.package-dir]
