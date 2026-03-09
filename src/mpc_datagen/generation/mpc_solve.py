@@ -1,5 +1,4 @@
 import time
-import logging
 import numpy as np
 
 from numpy.typing import NDArray
