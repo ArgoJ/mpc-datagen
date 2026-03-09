@@ -25,7 +25,7 @@ from . import extractor as mdg_extractor
 
 # Logger
 from pkg_logger import PackageLogger
-logger = PackageLogger.setup()
+logger = PackageLogger.setup(__name__)
 
 __all__ = [
     # Data structures
