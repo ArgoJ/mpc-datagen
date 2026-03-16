@@ -71,9 +71,10 @@ class MPCDataGenerator:
         """
         dataset = MPCDataset()
         accepted_x0: list[NDArray] = []
+        feasible_count = 0
 
         with __logger__.tqdm(range(n_samples), desc="Generating Trajectories") as pbar:
-            for _ in pbar:
+            for i in pbar:
                 try:
                     x0 = self.sampler.sample_x0(accepted_x0)
                 except RuntimeError as e:
@@ -92,6 +93,9 @@ class MPCDataGenerator:
                     cfg=temp_cfg,
                     xeps_cfg=self.xeps_cfg,
                 )
+                if mpc_data.is_feasible():
+                    feasible_count += 1
+                pbar.set_postfix({"feasible": feasible_count / (i + 1)})
 
                 dataset.add(mpc_data)
                 accepted_x0.append(x0)
