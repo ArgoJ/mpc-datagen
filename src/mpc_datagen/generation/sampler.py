@@ -1,7 +1,6 @@
 import numpy as np
 
 from numpy.typing import NDArray
-from abc import ABC
 from dataclasses import dataclass, field
 
 from pkg_logger import get_package_logger
@@ -10,7 +9,7 @@ __logger__ = get_package_logger(__name__)
 
 
 @dataclass
-class SamplerBase(ABC):
+class SamplerBase:
     """Base class for initial state sampling configurations.
 
     Parameters
@@ -28,16 +27,18 @@ class SamplerBase(ABC):
     """
 
     bounds: NDArray = field(default_factory=lambda: np.array([]))
+    bias: NDArray = field(default_factory=lambda: np.array([]))
     seed: int | None = None
     
     _rng: np.random.Generator = field(init=False, repr=False)
 
     def __post_init__(self):
         self._rng = np.random.default_rng(self.seed)
-        self._set_and_validate_bounds(self.bounds)
+        self._validate_bounds()
+        self._validate_bias()
 
-    def _set_and_validate_bounds(self, bounds: NDArray) -> None:
-        bounds_arr = np.asarray(bounds, dtype=float)
+    def _validate_bounds(self) -> None:
+        bounds_arr = np.asarray(self.bounds, dtype=float)
         if bounds_arr.ndim != 2 or bounds_arr.shape[0] != 2:
             raise ValueError(f"Bounds must have shape (2, nx). Got {bounds_arr.shape}.")
         lb, ub = bounds_arr[0], bounds_arr[1]
@@ -47,9 +48,24 @@ class SamplerBase(ABC):
             raise ValueError("Sampling bounds are invalid (lower >= upper).")
         self.bounds = bounds_arr
 
+    def _validate_bias(self) -> None:
+        bias_arr = np.asarray(self.bias, dtype=float)
+        if bias_arr.ndim != 1 or bias_arr.shape[0] != self.bounds.shape[1]:
+            raise ValueError(f"Bias must have shape ({self.bounds.shape[1]},). Got {bias_arr.shape}.")
+        if np.any(~np.isfinite(bias_arr)):
+            raise ValueError("Bias values must be finite.")
+        self.bias = bias_arr
+
     def sample_x0(self) -> NDArray:
         """Sample an initial state $x_0$."""
-        return self._rng.uniform(self.bounds[0], self.bounds[1])
+        rand_num = self._rng.random((self.bounds.shape[1],))
+        diff = self.bounds[:, 1] - self.bounds[:, 0] 
+        rand_num = self.bounds[:, 0] + rand_num * diff
+
+        if self.bias.size > 0:
+            return rand_num + self.bias
+        else:
+            return rand_num
 
 
 @dataclass
@@ -74,6 +90,7 @@ class UniqueBoundedSampler(SamplerBase):
 
     _min_dist_is_array: bool = field(init=False, repr=False, default=False)
     _uniqueness_disabled: bool = field(init=False, repr=False, default=False)
+    _accepted_x0: list[NDArray] = field(init=False, repr=False, default_factory=list)
 
     def __post_init__(self):
         super().__post_init__()
@@ -118,18 +135,16 @@ class UniqueBoundedSampler(SamplerBase):
             return bool(np.all(np.abs(x0 - existing_x0) <= self.min_dist))
         return bool(np.max(np.abs(x0 - existing_x0)) <= self.min_dist)
 
-    def sample_x0(self, accepted_x0: list[NDArray] | None = None) -> NDArray:
+    def sample_x0(self) -> NDArray:
         """Uniformly sample an x0 within bounds, rejecting if too close to any previously accepted x0."""
         if self._uniqueness_disabled:
             return super().sample_x0()
 
-        if accepted_x0 is None:
-            accepted_x0 = []
-
         for k in range(self.max_tries):
             x0 = super().sample_x0()
-            if not any(self._x0_is_too_close(x0, prev) for prev in accepted_x0):
+            if not any(self._x0_is_too_close(x0, prev) for prev in self._accepted_x0):
                 __logger__.debug(f"Accepted x0 ({x0}) after {k+1} tries.")
+                self._accepted_x0.append(x0)
                 return x0
 
         raise RuntimeError(

@@ -54,6 +54,13 @@ class MPCDataGenerator:
                 axis=0)
             sampler = UniqueBoundedSampler(bounds=default_bounds)
         self.sampler = sampler
+        self._validate_sampler()
+    
+    def _validate_sampler(self) -> None:
+        if not isinstance(self.sampler, SamplerBase):
+            raise ValueError("Sampler must be an instance of SamplerBase.")
+        if self.sampler.bounds.shape[1] != self.mpc_config.nx:
+            raise ValueError(f"Sampler bounds dimension {self.sampler.bounds.shape[1]} does not match MPC state dimension {self.mpc_config.nx}.")
 
     def generate(self, n_samples: int, only_feasible: bool = False) -> MPCDataset:
         """
@@ -72,14 +79,13 @@ class MPCDataGenerator:
             A dataset containing the generated trajectories.
         """
         dataset = MPCDataset()
-        accepted_x0: list[NDArray] = []
 
         feasible_count = 0
         iter_count = 0
         with __logger__.tqdm(total=n_samples, desc="Generating Trajectories") as pbar:
             while len(dataset) < n_samples:
                 try:
-                    x0 = self.sampler.sample_x0(accepted_x0)
+                    x0 = self.sampler.sample_x0()
                 except RuntimeError as e:
                     __logger__.error(f"Sampling failed: {e} \n STOPPING GENERATION")
                     break
@@ -100,7 +106,6 @@ class MPCDataGenerator:
                 iter_count += 1
                 if not only_feasible or mpc_data.is_feasible():
                     dataset.add(mpc_data)
-                    accepted_x0.append(x0)
                     
                     feasible_count += 1
                     feasible_percentage = feasible_count / iter_count * 100
