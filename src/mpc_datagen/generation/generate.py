@@ -95,7 +95,9 @@ class MPCDataGenerator:
                 )
                 if mpc_data.is_feasible():
                     feasible_count += 1
-                pbar.set_postfix({"feasible": feasible_count / (i + 1)})
+                
+                feasible_percentage = feasible_count / (i + 1) * 100
+                pbar.set_postfix_str(f"feasible: {feasible_percentage:.1f}%")
 
                 dataset.add(mpc_data)
                 accepted_x0.append(x0)
