@@ -62,8 +62,8 @@ class SamplerBase:
     def sample_x0(self) -> NDArray:
         """Sample an initial state $x_0$."""
         rand_num = self._rng.random((self.bounds.shape[1],))
-        diff = self.bounds[:, 1] - self.bounds[:, 0] 
-        rand_num = self.bounds[:, 0] + rand_num * diff
+        diff = self.bounds[1, :] - self.bounds[0, :]
+        rand_num = self.bounds[0, :] + rand_num * diff
 
         if self.bias.size > 0:
             return rand_num + self.bias
