@@ -49,6 +49,9 @@ class SamplerBase:
         self.bounds = bounds_arr
 
     def _validate_bias(self) -> None:
+        if self.bias.size == 0:
+            return
+        
         bias_arr = np.asarray(self.bias, dtype=float)
         if bias_arr.ndim != 1 or bias_arr.shape[0] != self.bounds.shape[1]:
             raise ValueError(f"Bias must have shape ({self.bounds.shape[1]},). Got {bias_arr.shape}.")
