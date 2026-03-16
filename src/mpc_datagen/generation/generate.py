@@ -55,7 +55,7 @@ class MPCDataGenerator:
             sampler = UniqueBoundedSampler(bounds=default_bounds)
         self.sampler = sampler
 
-    def generate(self, n_samples: int) -> MPCDataset:
+    def generate(self, n_samples: int, only_feasible: bool = False) -> MPCDataset:
         """
         Generates a dataset of MPC closed-loop trajectories starting from random initial states.
 
@@ -63,6 +63,8 @@ class MPCDataGenerator:
         ----------
         n_samples : int
             Number of trajectories to generate.
+        only_feasible : bool, optional
+            If True, only trajectories that are feasible are saved.
 
         Returns
         -------
@@ -71,14 +73,15 @@ class MPCDataGenerator:
         """
         dataset = MPCDataset()
         accepted_x0: list[NDArray] = []
-        feasible_count = 0
 
-        with __logger__.tqdm(range(n_samples), desc="Generating Trajectories") as pbar:
-            for i in pbar:
+        feasible_count = 0
+        iter_count = 0
+        with __logger__.tqdm(total=n_samples, desc="Generating Trajectories") as pbar:
+            while len(dataset) < n_samples:
                 try:
                     x0 = self.sampler.sample_x0(accepted_x0)
                 except RuntimeError as e:
-                    __logger__.error(f"Sampling failed: {e} \n - Stopping generation.")
+                    __logger__.error(f"Sampling failed: {e} \n STOPPING GENERATION")
                     break
 
                 temp_cfg = replace(
@@ -93,13 +96,15 @@ class MPCDataGenerator:
                     cfg=temp_cfg,
                     xeps_cfg=self.xeps_cfg,
                 )
-                if mpc_data.is_feasible():
-                    feasible_count += 1
-                
-                feasible_percentage = feasible_count / (i + 1) * 100
-                pbar.set_postfix_str(f"feasible: {feasible_percentage:.1f}%")
 
-                dataset.add(mpc_data)
-                accepted_x0.append(x0)
+                iter_count += 1
+                if not only_feasible or mpc_data.is_feasible():
+                    dataset.add(mpc_data)
+                    accepted_x0.append(x0)
+                    
+                    feasible_count += 1
+                    feasible_percentage = feasible_count / iter_count * 100
+                    pbar.update(1)
+                    pbar.set_postfix_str(f"feasible: {feasible_percentage:.1f}%")
 
         return dataset

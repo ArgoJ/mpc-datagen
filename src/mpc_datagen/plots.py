@@ -271,29 +271,33 @@ def mpc_trajectories(
     else:
         fig.show()
 
+
 def lyapunov(
-    dataset: MPCDataset,
     lyapunov_func: Callable[[NDArray], NDArray],
-    state_indices: list[int] = [0, 1],
+    dataset: MPCDataset | None = None,
+    state_indices: list = [0, 1],
     state_labels: list[str] | None = None,
-    limits: list[tuple[float, float]] | None = None,
+    limits: list = None,
     resolution: int = 100,
     plot_3d: bool = False,
-    html_path: str | None = None,
-    use_optimal_v: bool = False
-) -> None:
-    """Plot the Lyapunov function landscape and MPC trajectories in 2D or 3D.
+    html_path: str = None,
+    use_dataset_v: bool = False,
+):
+    """Plot Lyapunov landscape, trajectories, and optional certified regions in 2D/3D.
     Only two state dimensions can be visualized at once.
 
     Parameters
     ----------
-    dataset : MPCDataset
-        The dataset containing trajectories to plot.
     lyapunov_func : Callable[[NDArray], NDArray]
         A function that takes a state vector and returns the Lyapunov value.
-    state_indices : list[int], optional
+    dataset : MPCDataset, optional
+        The dataset containing trajectories to plot. If None, only the
+        Lyapunov landscape and optional regions are shown. Default is None.
+    state_indices : list, optional
         Indices of the two state variables to plot (x, y axes). Default is [0, 1].
-    limits : list[tuple[float, float]], optional
+    state_labels : list[str], optional
+        Labels for the plotted state dimensions. Defaults to ["State i", "State j"].
+    limits : list of tuples, optional
         ((min_x, max_x), (min_y, max_y)). If None, inferred from data with padding.
     resolution : int, optional
         Grid resolution for the Lyapunov function contour plot.
@@ -301,55 +305,84 @@ def lyapunov(
         If True, plot a 3D surface and 3D trajectories. Default is False.
     html_path : str, optional
         If provided, saves the plot to the specified HTML file.
+    use_dataset_v : bool, optional
+        If True, uses the dataset's value function for trajectory coloring instead of the horizon cost.
     """
-    if len(dataset) == 0:
-        __logger__.warning("Dataset is empty.")
-        return
-
-    # Infer dimensions
-    first_traj = dataset[0].trajectory
-    nx = first_traj.states.shape[1]
-    
     if len(state_indices) != 2:
         raise ValueError("state_indices must contain exactly 2 indices.")
 
+    if min(state_indices) < 0:
+        raise ValueError("state_indices must be non-negative.")
+
+    has_dataset = dataset is not None and len(dataset) > 0
+
+    # Infer state dimension from dataset if present, otherwise from indices.
+    if has_dataset:
+        first_traj = dataset[0].trajectory
+        num_states = first_traj.states.shape[1]
+    else:
+        num_states = max(state_indices) + 1
+
     idx_x, idx_y = state_indices
-    
+
+    if idx_x >= num_states or idx_y >= num_states:
+        raise ValueError(
+            f"state_indices {state_indices} exceed inferred state dimension {num_states}."
+        )
+
     if state_labels is None:
         state_labels = [f"State {idx_x}", f"State {idx_y}"]
     if len(state_labels) != 2:
         raise ValueError("state_labels must contain exactly 2 labels.")
-    
-    title_v = "V<sub>N</sub>" if use_optimal_v else "V<sub>horizon</sub>"
-    title = f"Lyapunov Landscape ({title_v}) - States {state_labels[0]} vs {state_labels[1]}"
 
     # Determine limits if not provided
     if limits is None:
-        all_states = np.vstack([d.trajectory.states for d in dataset])
-        min_x, max_x = all_states[:, idx_x].min(), all_states[:, idx_x].max()
-        min_y, max_y = all_states[:, idx_y].min(), all_states[:, idx_y].max()
-        
-        # Add some padding
-        pad_x = (max_x - min_x) * 0.2 if max_x != min_x else 1.0
-        pad_y = (max_y - min_y) * 0.2 if max_y != min_y else 1.0
-        
-        limits = [
-            (min_x - pad_x, max_x + pad_x),
-            (min_y - pad_y, max_y + pad_y)
-        ]
+        min_x = max_x = min_y = max_y = None
 
+        if has_dataset:
+            all_states = np.vstack([d.trajectory.states for d in dataset])
+            min_x = all_states[:, idx_x].min()
+            max_x = all_states[:, idx_x].max()
+            min_y = all_states[:, idx_y].min()
+            max_y = all_states[:, idx_y].max()
+
+        if min_x is None:
+            __logger__.warning(
+                "Could not infer limits without dataset/regions. Falling back to [-1, 1]^2."
+            )
+            limits = None
+        else:
+            # Add some padding
+            pad_x = (max_x - min_x) * 0.1 if max_x != min_x else 1.0
+            pad_y = (max_y - min_y) * 0.1 if max_y != min_y else 1.0
+
+            limits = [
+                (min_x - pad_x, max_x + pad_x),
+                (min_y - pad_y, max_y + pad_y)
+            ]
+
+    # === LYAPUNOV FUNCTION PLOT ===
+    # Create grid for Lyapunov function
+    x_range = np.linspace(limits[0][0], limits[0][1], resolution)
+    y_range = np.linspace(limits[1][0], limits[1][1], resolution)
+    X, Y = np.meshgrid(x_range, y_range)
+    
     # Prepare grid points for evaluation
-    x_vec = np.linspace(limits[0][0], limits[0][1], resolution)
-    y_vec = np.linspace(limits[1][0], limits[1][1], resolution)
-    X, Y = np.meshgrid(x_vec, y_vec)
+    grid_points = np.zeros((X.size, num_states))
+    grid_points[:, idx_x] = X.flatten()
+    grid_points[:, idx_y] = Y.flatten()
     
     # Evaluate Lyapunov function
-    points_2d = np.vstack([X.ravel(), Y.ravel()]).T
-    full_points = np.zeros((points_2d.shape[0], nx))
-    full_points[:, idx_x] = points_2d[:, 0]
-    full_points[:, idx_y] = points_2d[:, 1]
-    
-    Z_flat = lyapunov_func(full_points)
+    try:
+        Z_flat = lyapunov_func(grid_points)
+    except Exception:
+        Z_flat = np.array([lyapunov_func(s) for s in grid_points])
+        
+    if hasattr(Z_flat, 'ndim') and Z_flat.ndim > 1:
+        Z_flat = Z_flat.flatten()
+    elif isinstance(Z_flat, list):
+        Z_flat = np.array(Z_flat)
+        
     Z = Z_flat.reshape(X.shape)
 
     fig = go.Figure()
@@ -359,8 +392,8 @@ def lyapunov(
         fig.add_trace(
             go.Surface(
                 z=Z,
-                x=X,
-                y=Y,
+                x=x_range,
+                y=y_range,
                 colorscale='Viridis',
                 name='Lyapunov Function',
                 opacity=0.8,
@@ -371,8 +404,8 @@ def lyapunov(
         fig.add_trace(
             go.Contour(
                 z=Z,
-                x=X,
-                y=Y,
+                x=x_range,
+                y=y_range,
                 colorscale='Viridis',
                 name='Lyapunov Function',
                 showscale=True,
@@ -383,58 +416,72 @@ def lyapunov(
             )
         )
 
+    # === MPC TRAJECTORIES ===
     trajectory_indices = []
-    
-    # Plot MPC Trajectories
-    for idx in range(len(dataset)):
-        traj = dataset[idx].trajectory
-        color = COLORS[idx % len(COLORS)]
-        
-        if plot_3d:
-            if use_optimal_v and traj.V_horizon is not None:
-                v_traj = _plotly_multiline(traj.V_horizon)
-                x = _plotly_multiline(traj.predicted_states[:, :, idx_x])
-                y = _plotly_multiline(traj.predicted_states[:, :, idx_y])
+    colors = [
+        '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', 
+        '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf'
+    ]
+
+    if has_dataset:
+        for idx, entry in enumerate(dataset):
+            traj = entry.trajectory
+            color = colors[idx % len(colors)]
+
+            x = traj.states[:-1, idx_x].flatten()
+            y = traj.states[:-1, idx_y].flatten()
+
+            if plot_3d:
+                if use_dataset_v and entry.V_N is not None:
+                    v_traj = traj.V_N
+                else:
+                    try:
+                        v_traj = lyapunov_func(traj.states)
+                    except Exception: # Fallback to loop if lyapunov_func cannot handle batch input
+                        v_traj = np.array([lyapunov_func(s) for s in traj.states])
+
+                if v_traj.shape != x.shape or v_traj.shape != y.shape:
+                    __logger__.debug(
+                        f"Trajectory {idx+1} cost shape {v_traj.shape} does not match state shape {x.shape}; skipping."
+                    )
+                    continue
+                
+                if hasattr(v_traj, 'ndim') and v_traj.ndim > 1:
+                    v_traj = v_traj.flatten()
+                elif isinstance(v_traj, list):
+                    v_traj = np.array(v_traj)
+
+                fig.add_trace(
+                    go.Scatter3d(
+                        x=x, y=y,
+                        z=v_traj,
+                        mode='lines',
+                        name=f'Run {idx+1}',
+                        line=dict(color=color, width=4),
+                        showlegend=False
+                    )
+                )
             else:
-                v_traj = traj.V_N.flatten()
-                x = traj.states[:-1, idx_x].flatten()
-                y = traj.states[:-1, idx_y].flatten()
-
-            if v_traj.shape != x.shape or v_traj.shape != y.shape:
-                __logger__.debug(
-                    f"Trajectory {idx+1} cost shape {v_traj.shape} does not match state shape {x.shape}; skipping."
+                fig.add_trace(
+                    go.Scatter(
+                        x=x, y=y,
+                        mode='lines',
+                        name=f'Run {idx+1}',
+                        line=dict(color=color, width=2),
+                        opacity=0.7,
+                        showlegend=False
+                    )
                 )
-                continue
+            trajectory_indices.append(len(fig.data) - 1)
 
-            fig.add_trace(
-                go.Scatter3d(
-                    x=x,
-                    y=y,
-                    z=v_traj,
-                    mode='lines',
-                    name=f'Run {idx+1}',
-                    line=dict(color=color, width=4),
-                    showlegend=False
-                )
-            )
-        else:
-            fig.add_trace(
-                go.Scatter(
-                    x=traj.states[:, idx_x],
-                    y=traj.states[:, idx_y],
-                    mode='lines',
-                    name=f'Run {idx+1}',
-                    line=dict(color=color, width=2),
-                    opacity=0.7,
-                    showlegend=False
-                )
-            )
-        trajectory_indices.append(len(fig.data) - 1)
 
-    # Layout Configuration
+    # === CONFIGURE LAYOUT ===
     if plot_3d:
         fig.update_layout(
-            title_text=title,
+            title_text=(
+                f"Lyapunov Landscape 3D"
+                f"({state_labels[0]} vs {state_labels[1]})"
+            ),
             scene=dict(
                 xaxis_title=state_labels[0],
                 yaxis_title=state_labels[1],
@@ -446,7 +493,10 @@ def lyapunov(
         )
     else:
         fig.update_layout(
-            title_text=title,
+            title_text=(
+                f"Lyapunov Landscape"
+                f"({state_labels[0]} vs {state_labels[1]})"
+            ),
             xaxis_title=state_labels[0],
             yaxis_title=state_labels[1],
             yaxis=dict(
@@ -456,41 +506,44 @@ def lyapunov(
         )
     
     # Toggle Button for Trajectories
-    fig.update_layout(
-        updatemenus=[
-            dict(
-                type="buttons",
-                direction="left",
-                buttons=list([
-                    dict(
-                        args=[{"visible": True}, trajectory_indices],
-                        args2=[{"visible": False}, trajectory_indices],
-                        label="Trajectories",
-                        method="restyle"
-                    )
-                ]),
-                pad={"r": 10, "t": 10},
-                showactive=True,
-                x=1.0,
-                xanchor="right",
-                y=-0.05,
-                yanchor="top"
-            ),
-        ]
-    )
+    if trajectory_indices:
+        fig.update_layout(
+            updatemenus=[
+                dict(
+                    type="buttons",
+                    direction="left",
+                    buttons=list([
+                        dict(
+                            args=[{"visible": True}, trajectory_indices],
+                            args2=[{"visible": False}, trajectory_indices],
+                            label="Trajectories",
+                            method="restyle"
+                        )
+                    ]),
+                    pad={"r": 10, "t": 10},
+                    showactive=True,
+                    x=1.0,
+                    xanchor="right",
+                    y=-0.05,
+                    yanchor="top"
+                ),
+            ]
+        )
 
     if html_path is not None:
-        os.makedirs(os.path.dirname(html_path), exist_ok=True)
-        fig.write_html(html_path, include_mathjax='cdn')
+        dir_path = os.path.dirname(html_path)
+        if dir_path:
+            os.makedirs(dir_path, exist_ok=True)
+        fig.write_html(html_path)
         __logger__.info(f"Trajectories plot saved to {html_path}.")
     else:
-        fig.show()
+        return fig
 
 def relaxed_dp_residual(
     dataset: MPCDataset,
     alpha: float = 1.0,
     html_path: str | None = None
-) -> None:
+) -> go.Figure | None:
     """Plot Lyapunov-style one-step descent check.
 
     For each trajectory entry, plots
@@ -517,7 +570,7 @@ def relaxed_dp_residual(
     """
     if len(dataset) == 0:
         __logger__.warning("Dataset is empty.")
-        return
+        return None
 
     fig = go.Figure()
     if alpha == 1.0:
@@ -654,13 +707,13 @@ def relaxed_dp_residual(
         fig.write_html(html_path, include_mathjax='cdn')
         __logger__.info(f"Relaxed DP residual plot saved to {html_path}.")
     else:
-        fig.show()
+        return fig
 
 def cost_descent(
     dataset: MPCDataset,
     html_path: str = None,
     use_optimal_v: bool = False
-) -> None:
+) -> go.Figure | None:
     """Plot cost descent check.
 
     For each trajectory entry, plots
@@ -850,7 +903,7 @@ def cost_descent(
         fig.write_html(html_path, include_mathjax='cdn')
         __logger__.info(f"Cost to go descent plot saved to {html_path}.")
     else:
-        fig.show()
+        return fig
 
 def roa(
     lyapunov_func: Callable[[NDArray], NDArray],
@@ -863,7 +916,7 @@ def roa(
     plot_3d: bool = False,
     show_level_plane: bool = False,
     html_path: str | None = None
-) -> None:
+) -> go.Figure | None:
     
     if len(state_indices) != 2:
         raise ValueError("state_indices must contain exactly 2 indices.")
@@ -984,12 +1037,11 @@ def roa(
         os.makedirs(os.path.dirname(html_path), exist_ok=True)
         fig.write_html(html_path)
     else:
-        fig.show()
+        return fig
 
 
 def all(
     dataset: MPCDataset,
-    state_indices: list[int] = [0, 1],
     state_labels: list[str] | None = None,
     control_labels: list[str] | None = None,
     limits: list[tuple[float, float]] | None = None,
@@ -1009,7 +1061,8 @@ def all(
 
     # lyapunov specific
     lyapunov_func: Callable[[NDArray], NDArray] = None,
-    lyap_use_optimal_v: bool = False,
+    lyap_state_indices: list[int] = [0, 1],
+    lyap_use_dataset_v: bool = False,
 
     # roa specific
     roa_lyapunov_func: Callable[[NDArray], NDArray] = None,
@@ -1018,8 +1071,7 @@ def all(
     roa_bounds: NDArray = None,
 ) -> None:
     """Convenience function to plot trajectories, residuals, Lyapunov, and ROA together."""
-    state_labels = state_labels if state_labels else [f"State {i}" for i in state_indices]
-    control_labels = control_labels if control_labels else [f"Control {i}" for i in range(dataset[0].trajectory.inputs.shape[1])]
+    lyap_state_labels = [state_labels[i] for i in lyap_state_indices] if state_labels else None
 
     mpc_trajectories(
         dataset=dataset,
@@ -1044,13 +1096,13 @@ def all(
     lyapunov(
         dataset=dataset,
         lyapunov_func=lyapunov_func,
-        state_indices=state_indices,
-        state_labels=state_labels,
+        state_indices=lyap_state_indices,
+        state_labels=lyap_state_labels,
         limits=limits,
         resolution=resolution,
         plot_3d=plot_3d,
-        use_optimal_v=lyap_use_optimal_v,
-        html_path=lyapunov_path
+        html_path=lyapunov_path,
+        use_dataset_v=lyap_use_dataset_v
     )
 
     if roa_lyapunov_func is None:
@@ -1062,8 +1114,8 @@ def all(
         lyapunov_func=roa_lyapunov_func,
         c_level=c_level,
         bounds=roa_bounds,
-        state_indices=state_indices,
-        state_labels=state_labels,
+        state_indices=lyap_state_indices,
+        state_labels=lyap_state_labels,
         limits=limits,
         resolution=resolution,
         plot_3d=plot_3d,

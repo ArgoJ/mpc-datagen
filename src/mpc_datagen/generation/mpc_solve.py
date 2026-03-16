@@ -114,13 +114,19 @@ def solve_mpc_closed_loop(
     current_x = cfg.constraints.x0.copy()
     is_feasible_run = True
     in_eps_streak = 0
+    is_sqp_solver = (solver.acados_ocp.solver_options.nlp_solver_type.lower() == "sqp")
+    __logger__.debug(f"Starting closed-loop simulation for T_sim={cfg.T_sim} steps. SQP solver: {is_sqp_solver}")
 
     sim_start_time = time.time()
-
     T_eff = 0
     for i in range(cfg.T_sim):
-        solver.set(0, "lbx", current_x)
-        solver.set(0, "ubx", current_x)
+
+        if is_sqp_solver:
+            x_guess = np.tile(current_x, cfg.N + 1)
+            solver.set_flat("x", x_guess)
+
+        solver.constraints_set(0, "lbx", current_x)
+        solver.constraints_set(0, "ubx", current_x)
         
         with PackageLogger.suppress_native_output(suppress_stdout=True, suppress_stderr=False):
             status = solver.solve()
