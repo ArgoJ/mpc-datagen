@@ -1,7 +1,7 @@
 import numpy as np
 
 from numpy.typing import NDArray
-from collections.abc import Generator, Iterable
+from collections.abc import Generator
 from acados_template import AcadosOcpSolver
 
 from .reports import *
@@ -20,7 +20,7 @@ class StabilityVerifier:
     based on the optimal value function V_N as a Lyapunov function.
     """
 
-    def __init__(self, dataset: MPCDataset, solver: AcadosOcpSolver | None = None):
+    def __init__(self, dataset: MPCDataset, solver: AcadosOcpSolver | None = None, only_feasible: bool = True):
         """Create a linear stability verifier over an entire dataset.
 
         Parameters
@@ -29,8 +29,11 @@ class StabilityVerifier:
             The dataset containing MPC trajectories and configurations.
         solver : AcadosOcpSolver, optional
             The Acados OCP solver instance used for linear stability verification.
+        only_feasible : bool, optional
+            Whether to strictly check and verify only feasible trajectory entries. Default is True.
         """
         self.dataset = dataset
+        self.only_feasible = only_feasible
         self.eps = 1e-6
 
         # Bindable entry 
@@ -42,6 +45,8 @@ class StabilityVerifier:
         self.cfg: MPCConfig | None = None
         if isinstance(solver, AcadosOcpSolver):
             self.cfg = MPCConfigExtractor.get_cfg(solver)
+
+        self._valid_dataset_indices = self._feasible_indices() if self.only_feasible else list(range(len(self.dataset)))
 
     @property
     def T_sim(self) -> int:
@@ -55,14 +60,15 @@ class StabilityVerifier:
             raise ValueError("No active entry is bound (internal error).")
         return int(self._active_T_sim)
 
-    def __getitem__(self, index: int) -> MPCData:
-        return self.dataset[index]
+    def __getitem__(self, index: int | slice) -> MPCData | MPCDataset:
+        return self.dataset[self._valid_dataset_indices[index]]
 
     def __len__(self) -> int:
-        return len(self.dataset)
+        return len(self._valid_dataset_indices)
 
     def __iter__(self) -> Generator[MPCData, None, None]:
-        for entry in self.dataset:
+        for idx in self._valid_dataset_indices:
+            entry = self.dataset[idx]
             self._bind_entry(entry)
             yield entry
 
@@ -123,33 +129,9 @@ class StabilityVerifier:
 
 
     # --- DATASET ITERATORS ---
-    class _FeasibleBoundEntries:
-        """Sized iterable over feasible entries that binds verifier state on iteration."""
-
-        def __init__(self, verifier: "StabilityVerifier", idx_list: list[int]):
-            if not idx_list:
-                raise ValueError("idx_list for _FeasibleBoundEntries cannot be empty.")
-
-            self._verifier = verifier
-            self._idx_list = idx_list
-
-        def __iter__(self) -> Generator[MPCData, None, None]:
-            for idx in self._idx_list:
-                entry = self._verifier.dataset[idx]
-                self._verifier._bind_entry(entry)
-                yield entry
-
-        def __len__(self) -> int:
-            return len(self._idx_list)
-
-    def feasible_indices(self) -> list[int]:
-        """Return indices of feasible entries in the dataset."""
+    def _feasible_indices(self) -> list[int]:
+        """Return indices of feasible entries in the true underlying dataset."""
         return [idx for idx, entry in enumerate(self.dataset) if entry.is_feasible()]
-
-    def iter_feasible(self) -> Iterable[MPCData]:
-        """Return a sized iterable over feasible entries while binding internal state."""
-        idx_list = self.feasible_indices()
-        return self._FeasibleBoundEntries(self, idx_list)
 
 
     # --- L* OPTIMIZATION ---
@@ -281,7 +263,7 @@ class StabilityVerifier:
         total_steps = 0
         
         with  __logger__.tqdm(
-            self.iter_feasible(),
+            self,
             desc="Checking Lyapunov descent",
             unit="trajectory",
         ) as pbar:
@@ -399,7 +381,7 @@ class StabilityVerifier:
 
 
         with __logger__.tqdm(
-            self.iter_feasible(),
+            self,
             desc="Checking asymptotic stability (alpha-decay)",
             unit="trajectory",
         ) as pbar:
@@ -489,7 +471,7 @@ class StabilityVerifier:
         gamma_values: list[float] = []
 
         with __logger__.tqdm(
-            self.iter_feasible(),
+            self,
             desc="Estimating Grüne gamma values",
             unit="trajectory",
         ) as pbar:
@@ -526,6 +508,7 @@ class StabilityVerifier:
         dataset: MPCDataset,
         solver: AcadosOcpSolver | None = None,
         alpha_required: float = 1e-4,
+        only_feasible: bool = True,
     ) -> StabilityReport:
         """Dataset-level verification using the optimal value function as a Lyapunov candidate.
         
@@ -537,13 +520,15 @@ class StabilityVerifier:
             The Acados OCP solver instance used for linear stability verification.
         alpha_required : float
             Minimum empirical alpha required for verification.
+        only_feasible : bool
+            Whether to strictly check and verify only feasible trajectory entries. Default is True.
 
         Returns
         -------
         StabilityReport
             Stability report indicating whether the dataset passes empirical checks.
         """
-        verifier = StabilityVerifier(dataset, solver)
+        verifier = StabilityVerifier(dataset, solver, only_feasible=only_feasible)
 
         # 1. Global Descent Check (Monotonicity)
         descent_report = verifier.check_lyapunov_descent()
