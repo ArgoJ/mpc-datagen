@@ -120,6 +120,9 @@ class StabilityVerifier:
                 "Entry and solver terminal_cost do not match. "
                 "This verifier assumes terminal_cost for the entire dataset."
             )
+        
+        if self.traj.V_N is None or len(self.traj.V_N) == 0:
+            raise ValueError("Trajectory does not contain V_N values, which are required for stability verification.")
 
     def _require_bound_entry(self) -> None:
         if self._active_entry is None or self.traj is None or self.cfg is None or self._active_T_sim is None:
@@ -127,8 +130,6 @@ class StabilityVerifier:
                 "No active entry is bound (internal error). Dataset-level methods must bind an entry before calling per-trajectory helpers."
             )
 
-
-    # --- DATASET ITERATORS ---
     def _feasible_indices(self) -> list[int]:
         """Return indices of feasible entries in the true underlying dataset."""
         return [idx for idx, entry in enumerate(self.dataset) if entry.is_feasible()]
