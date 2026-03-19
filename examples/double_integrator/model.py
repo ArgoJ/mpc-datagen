@@ -80,6 +80,7 @@ def get_ocp_solver(
     terminal_mode: str = "regional",
     bounds_scale: float = 10.0,
     terminal_box_halfwidth: float = 1.0,
+    use_temp_dir: bool = True,
 ) -> tuple[AcadosOcpSolver, dict]:
     """Create an acados OCP solver for a continuous-time linear system.
 
@@ -175,7 +176,11 @@ def get_ocp_solver(
         ocp.constraints.ubx_e = np.zeros((nx,))
         ocp.constraints.idxbx_e = np.arange(nx)
 
-    solver = AcadosOcpSolver(ocp, json_file=f"{ocp.model.name}_ocp.json")
+    json_file = f"{ocp.model.name}_ocp.json"
+    if use_temp_dir:
+        solver = get_temp_solver(ocp)
+    else:
+        solver = AcadosOcpSolver(ocp, json_file=json_file)
 
     info = {
         "A_d": A_d,

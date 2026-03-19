@@ -3,7 +3,8 @@ from .generation import (
     MPCDataGenerator,
     EpsBandConfig,
     UniqueBoundedSampler,
-    SamplerBase
+    SamplerBase,
+    get_temp_solver
 )
 
 # Data structures
@@ -48,4 +49,7 @@ __all__ = [
     "mdg_linalg",
     "mdg_plt",
     "mdg_extractor",
+
+    # Helpers
+    "get_temp_solver",
 ]

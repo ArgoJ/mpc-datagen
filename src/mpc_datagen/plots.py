@@ -432,7 +432,7 @@ def lyapunov(
             y = traj.states[:-1, idx_y].flatten()
 
             if plot_3d:
-                if use_dataset_v and entry.V_N is not None:
+                if use_dataset_v and traj.V_N is not None and traj.V_N.size > 0:
                     v_traj = traj.V_N
                 else:
                     try:
@@ -494,14 +494,16 @@ def lyapunov(
     else:
         fig.update_layout(
             title_text=(
-                f"Lyapunov Landscape"
+                f"Lyapunov Landscape "
                 f"({state_labels[0]} vs {state_labels[1]})"
             ),
-            xaxis_title=state_labels[0],
-            yaxis_title=state_labels[1],
+            xaxis=dict(
+                title=state_labels[0],
+                range=[limits[0][0], limits[0][1]]
+            ),
             yaxis=dict(
-                scaleanchor="x",
-                scaleratio=1,
+                title=state_labels[1],
+                range=[limits[1][0], limits[1][1]],
             )
         )
     
@@ -534,7 +536,7 @@ def lyapunov(
         dir_path = os.path.dirname(html_path)
         if dir_path:
             os.makedirs(dir_path, exist_ok=True)
-        fig.write_html(html_path)
+        fig.write_html(html_path, include_mathjax='cdn')
         __logger__.info(f"Trajectories plot saved to {html_path}.")
     else:
         return fig
@@ -574,9 +576,9 @@ def relaxed_dp_residual(
 
     fig = go.Figure()
     if alpha == 1.0:
-        title = "Relaxed DP residual: s<sub>n</sub> = V<sub>N</sub>(x<sub>n+1</sub>) - V<sub>N</sub>(x<sub>n</sub>) + &#8467;(x<sub>n</sub>,u<sub>n</sub>)"
+        title = r"$\text{DP Lyapunov residual: } s_n = V_N(x_{n+1}) - V_N(x_n) + \ell(x_n,u_n)$"
     elif alpha < 1.0 and alpha >= 0.0:
-        title = f"Relaxed DP residual: s<sub>n</sub>(&alpha;) = V<sub>N</sub>(x<sub>n+1</sub>) - V<sub>N</sub>(x<sub>n</sub>) + &alpha;&#8467;(x<sub>n</sub>,u<sub>n</sub>)"
+        title = r"$\text{Relaxed DP Lyapunov residual: } s_n(\alpha) = V_N(x_{n+1}) - V_N(x_n) + \alpha \ell(x_n,u_n) \text{ with } \alpha = " + f"{alpha:.3f}$"
     else:
         raise ValueError("alpha must be in the range (0, 1].")
 
@@ -750,13 +752,11 @@ def cost_descent(
     if use_optimal_v:
         dim_idx = 0
         V_getter = (lambda t: t.V_N)
-        title = ("Cost descent check (V<sub>N</sub>): "
-                 "ΔV = V<sub>N</sub>(x<sub>k+1</sub>) - V<sub>N</sub>(x<sub>k</sub>)")
+        title = r"$\text{Cost descent check } (V_N)\text{: } \Delta V = V_N(x_{k+1}) - V_N(x_k)$"
     else:
         dim_idx = 1
         V_getter = lambda t: t.V_pred
-        title = ("Cost to go descent check (V<sub>k</sub>): "
-                 "ΔV = V<sub>k+1</sub> - V<sub>k</sub>")
+        title = r"$\text{Cost to go descent check } (V_k)\text{: } \Delta V = V_{k+1} - V_k$"
 
     per_entry_deltas = []  # list of tuples (id, deltas_2d)
     total_lines = 0
@@ -1014,7 +1014,7 @@ def roa(
         ))
     # --- Layout ---
     layout_args = dict(
-        title=f"Stability Verification: ROA for c={c_level:.2f}",
+        title=f"Stability Verification: ROA for c={c_level:.2f}" if plot_3d else r"$\text{Stability Verification: ROA for } c = " + f"{c_level:.2f}$",
         legend=dict(x=1.05, y=1),
         autosize=True,
         margin=dict(l=0, r=50, b=0, t=50)
@@ -1027,15 +1027,20 @@ def roa(
             zaxis_title="V(x)"
         )
     else:
-        layout_args['xaxis_title'] = state_labels[0]
-        layout_args['yaxis_title'] = state_labels[1]
-        layout_args['yaxis'] = dict(scaleanchor="x", scaleratio=1)
+        layout_args['xaxis'] = dict(
+            title=state_labels[0],
+            range=[limits[0][0], limits[0][1]]
+        )
+        layout_args['yaxis'] = dict(
+            title=state_labels[1],
+            range=[limits[1][0], limits[1][1]],
+        )
 
     fig.update_layout(**layout_args)
 
     if html_path:
         os.makedirs(os.path.dirname(html_path), exist_ok=True)
-        fig.write_html(html_path)
+        fig.write_html(html_path, include_mathjax='cdn')
     else:
         return fig
 
