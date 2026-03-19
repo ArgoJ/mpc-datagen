@@ -107,7 +107,7 @@ class MPCDataGenerator:
                 try:
                     x0 = self.sampler.sample_x0()
                 except RuntimeError as e:
-                    __logger__.error(f"Sampling failed: {e} \n STOPPING GENERATION")
+                    __logger__.warning(f"Sampling failed: {e} \n STOPPING GENERATION")
                     break
 
                 temp_cfg = replace(
@@ -140,11 +140,7 @@ class MPCDataGenerator:
                             f"{consequtive_infeasible} consecutive infeasible trajectories. "
                             f"Regenerating solver to reset internal state."
                         ))
-                        try:
-                            self.solver = self._regenerate_solver(self.solver)
-                            consequtive_infeasible = 0
-                        except Exception as e:
-                            __logger__.error(f"Solver regeneration failed: {e} \n STOPPING GENERATION")
-                            break
+                        self.solver = self._regenerate_solver(self.solver)
+                        consequtive_infeasible = 0
 
         return dataset
