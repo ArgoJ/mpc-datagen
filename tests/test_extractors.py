@@ -12,7 +12,7 @@ sys.path.insert(0, str(SRC))
 
 from mpc_datagen.extractor import (
     LinearSystemExtractor, 
-    MPCConfigExtractor
+    extract_cfg
 )
 
 from acados_solver_example import get_basic_double_integrator_ocp_solver
@@ -30,7 +30,7 @@ class TestExtractors(unittest.TestCase):
         np.testing.assert_allclose(extracted.B, self.system_info["B_d"])
         
     def test_passes_cfg_extraction(self) -> None:
-        extracted = MPCConfigExtractor.get_cfg(self.solver)
+        extracted = extract_cfg(self.solver)
         
         N = self.solver.acados_ocp.solver_options.N_horizon
         dt = float(self.solver.acados_ocp.solver_options.tf) / int(N)

@@ -2,9 +2,9 @@ import numpy as np
 
 from numpy.typing import NDArray
 from typing import Any, Literal
-from acados_template import AcadosOcpSolver
+from acados_template import AcadosOcp, AcadosOcpSolver, AcadosOcpBatchSolver
 
-from .mpc_data import MPCConfig, LinearSystem
+from .mpc_data import MPCConfig, LinearSystem, LinearLSCost, Constraints
 from .linalg import discretize_and_linearize_rk4
 from pkg_logger import get_package_logger
 
@@ -26,6 +26,23 @@ def _is_none(*values: Any) -> Any:
             return True
         
     return False
+
+def is_batch_solver(solver: AcadosOcpSolver | AcadosOcpBatchSolver) -> bool:
+    return isinstance(solver, AcadosOcpBatchSolver)
+
+def get_primary_solver(solver: AcadosOcpSolver | AcadosOcpBatchSolver) -> AcadosOcpSolver:
+    if is_batch_solver(solver):
+        return solver.ocp_solvers[0]
+    return solver
+
+def validate_solver(solver: AcadosOcpSolver | AcadosOcpBatchSolver) -> None:
+    if not isinstance(solver, (AcadosOcpSolver, AcadosOcpBatchSolver)):
+        raise ValueError("Solver must be an instance of AcadosOcpSolver or AcadosOcpBatchSolver.")
+
+def resolve_solver(solver: AcadosOcpSolver | AcadosOcpBatchSolver) -> AcadosOcpSolver | AcadosOcpBatchSolver:
+    validate_solver(solver)
+    return get_primary_solver(solver)
+
 
 # --- Extracts ---
 def extract_stage_reference(
@@ -99,6 +116,7 @@ def indexed_bounds(
     full_ub[idx] = ub
     return full_lb, full_ub
 
+
 def extract_QR(
     W: NDArray, 
     Vx: NDArray, 
@@ -117,6 +135,7 @@ def extract_QR(
 
     return Q, R
 
+
 def extract_Qf(
     W_e: NDArray,
     Vx_e: NDArray
@@ -134,170 +153,162 @@ def extract_Qf(
     return Qf
 
 
-# --- Extractor class for AcadosOcpSolver ---
-class MPCConfigExtractor():
-    """Extractor for AcadosOcpSolver objects.
+def extract_cost(ocp: AcadosOcp, dt: float) -> LinearLSCost:
+    """Extract the initial state x0 from acados constraints."""
+    cost = LinearLSCost()
+    cost.Vx = ocp.cost.Vx
+    cost.Vu = ocp.cost.Vu
+    cost.W = ocp.cost.W
+    cost.yref = ocp.cost.yref
+    cost.Vx_e = ocp.cost.Vx_e
+    cost.W_e = ocp.cost.W_e
+    cost.yref_e = ocp.cost.yref_e
 
-    This class extracts relevant matrices and parameters from an `AcadosOcpSolver`
-    instance for use in Lyapunov verification routines.
+    if ocp.solver_options.cost_scaling is not None \
+        and (not np.allclose(ocp.solver_options.cost_scaling[:-1], dt) \
+        or ocp.solver_options.cost_scaling[-1] != 1.0):
+        __logger__.warning(
+            "Cost scaling is not supported in this extractor. "
+            f"Using default stage_scale = {dt}, terminal_scale = 1.0. \n {ocp.solver_options.cost_scaling}")
+    
+    cost.stage_scale = dt
+    cost.terminal_scale = 1.0
+    return cost
+
+
+def extract_constraints(ocp: AcadosOcp, nx: int, nu: int) -> Constraints:
+    """Extract full input bounds from acados indexed bounds."""
+    constr = ocp.constraints
+    constraints = Constraints()
+
+    # Initial state
+    constraints.x0 = constr.x0 if constr.x0 is not None else np.array([])
+
+    # State bounds
+    x_bounds = indexed_bounds(
+        constr.lbx,
+        constr.ubx,
+        constr.idxbx,
+        nx
+    )
+    if x_bounds is not None:
+        constraints.lbx = x_bounds[0]
+        constraints.ubx = x_bounds[1]
+
+    # Input bounds
+    u_bounds = indexed_bounds(
+        constr.lbu,
+        constr.ubu,
+        constr.idxbu,
+        nu
+    )
+    if u_bounds is not None:
+        constraints.lbu = u_bounds[0]
+        constraints.ubu = u_bounds[1]
+
+    # Terminal state bounds
+    x_e_bounds = indexed_bounds(
+        constr.lbx_e,
+        constr.ubx_e,
+        np.arange(nx),
+        nx
+    )
+    if x_e_bounds is not None:
+        constraints.lbx_e = x_e_bounds[0]
+        constraints.ubx_e = x_e_bounds[1]
+
+    return constraints
+
+
+def extract_x_and_u_lin(cost: LinearLSCost, nx: int, nu: int) -> tuple[NDArray, NDArray]:
+    """Get linearization points for state and input."""
+    if cost.yref.shape[0] != (nx + nu):
+        raise ValueError(
+            "Cannot extract linearization points from yref with unexpected size. "
+            f"Expected size nx + nu = {nx + nu}, got {cost.yref.shape[0]}."
+        )
+
+    x_lin = cost.yref[:nx]
+    u_lin = cost.yref[nx:]
+
+    if x_lin is None:
+        raise ValueError("Cannot extract linearization point for state: x_ref is None.")
+    if u_lin is None:
+        raise ValueError("Cannot extract linearization point for input: u_ref is None.")
+
+    return x_lin, u_lin
+
+
+def extract_discretized_dynamics(
+    ocp: AcadosOcp,
+    x_lin: NDArray,
+    u_lin: NDArray,
+    dt: float,
+) -> LinearSystem:
+    """Compute the discrete-time linearization (A, B, g).
+    
+    Parameters
+    ----------
+    x_lin, u_lin : NDArray
+        Linearization points for state and input.
+    dt : float
+        Sampling time.
+
+    Returns
+    -------
+    Ad, Bd : NDArray
+        Discrete-time state and input matrices.
+    gd : NDArray
+        Affine offset term so that $x^+ \\approx Ad x + Bd u + gd$.
     """
+    if ocp.solver_options.integrator_type != "ERK" or ocp.model.f_expl_expr is None:
+        raise NotImplementedError("Only explicit ODE models are supported in this verifier.")
 
-    def __init__(self, solver: AcadosOcpSolver) -> None:
-        self.ocp = solver.acados_ocp
-        self.cfg = MPCConfig(
-            T_sim=0,  # not extractable here
-            N=self.ocp.solver_options.N_horizon,
-            nx=self.ocp.dims.nx,
-            nu=self.ocp.dims.nu,
-            dt=float(self.ocp.solver_options.tf) / float(self.ocp.solver_options.N_horizon),
-        )
-        self._extract_constraints()
-        self._extract_cost()
-        self._extract_model()
+    if ocp.solver_options.sim_method_num_stages is not None and np.any(ocp.solver_options.sim_method_num_stages != 4):
+        raise NotImplementedError("Only RK4 integration is supported in this verifier.")
     
-    @classmethod
-    def get_cfg(cls, solver: AcadosOcpSolver) -> MPCConfig:
-        """Get the extracted MPCConfig.
-        
-        Note
-        ----
-        T_sim needs to be set separately, as it is not extractable from AcadosOcpSolver.
-        """
-        extractor = cls(solver)
-        return extractor.cfg
+    if ocp.solver_options.sim_method_num_steps is not None and np.any(ocp.solver_options.sim_method_num_steps < 1):
+        raise NotImplementedError("Number of integration steps must be at least 1.")
 
-    def _extract_cost(self) -> None:
-        """Extract the initial state x0 from acados constraints."""
-        self.cfg.cost.Vx = self.ocp.cost.Vx
-        self.cfg.cost.Vu = self.ocp.cost.Vu
-        self.cfg.cost.W = self.ocp.cost.W
-        self.cfg.cost.yref = self.ocp.cost.yref
-        self.cfg.cost.Vx_e = self.ocp.cost.Vx_e
-        self.cfg.cost.W_e = self.ocp.cost.W_e
-        self.cfg.cost.yref_e = self.ocp.cost.yref_e
-        
-        if self.ocp.solver_options.cost_scaling is not None \
-            and (not np.allclose(self.ocp.solver_options.cost_scaling[:-1], self.cfg.dt) \
-            or self.ocp.solver_options.cost_scaling[-1] != 1.0):
-            __logger__.warning(
-                "Cost scaling is not supported in this extractor. "
-                f"Using default stage_scale = {self.cfg.dt}, terminal_scale = 1.0. \n {self.ocp.solver_options.cost_scaling}")
-        
-        self.cfg.cost.stage_scale = self.cfg.dt
-        self.cfg.cost.terminal_scale = 1.0
+    x = ocp.model.x
+    u = ocp.model.u
+    f_expr = ocp.model.f_expl_expr
 
-    def _extract_constraints(self) -> None:
-        """Extract full input bounds from acados indexed bounds."""
-        constr = self.ocp.constraints
+    return LinearSystem(*discretize_and_linearize_rk4(
+        x, u, f_expr, dt, x_lin, u_lin
+    ))
 
-        # Initial state
-        self.cfg.constraints.x0 = constr.x0 if constr.x0 is not None else np.array([])
 
-        # State bounds
-        x_bounds = indexed_bounds(
-            constr.lbx,
-            constr.ubx,
-            constr.idxbx,
-            self.cfg.nx
-        )
-        if x_bounds is not None:
-            self.cfg.constraints.lbx = x_bounds[0]
-            self.cfg.constraints.ubx = x_bounds[1]
+def extract_model(
+    ocp: AcadosOcp,
+    cost: LinearLSCost,
+    nx: int,
+    nu: int,
+    dt: float,
+) -> LinearSystem:
+    """Extract the discretized model dynamics."""
+    x_lin, u_lin = extract_x_and_u_lin(cost, nx, nu)
+    return extract_discretized_dynamics(ocp, x_lin, u_lin, dt)
 
-        # Input bounds
-        u_bounds = indexed_bounds(
-            constr.lbu,
-            constr.ubu,
-            constr.idxbu,
-            self.cfg.nu
-        )
-        if u_bounds is not None:
-            self.cfg.constraints.lbu = u_bounds[0]
-            self.cfg.constraints.ubu = u_bounds[1]
 
-        # Terminal state bounds
-        x_e_bounds = indexed_bounds(
-            constr.lbx_e,
-            constr.ubx_e,
-            np.arange(self.cfg.nx),
-            self.cfg.nx
-        )
-        if x_e_bounds is not None:
-            self.cfg.constraints.lbx_e = x_e_bounds[0]
-            self.cfg.constraints.ubx_e = x_e_bounds[1]
+def _extract_single_cfg(solver: AcadosOcpSolver) -> MPCConfig:
+    ocp = solver.acados_ocp
+    cfg = MPCConfig(
+        T_sim=0,
+        N=ocp.solver_options.N_horizon,
+        nx=ocp.dims.nx,
+        nu=ocp.dims.nu,
+        dt=float(ocp.solver_options.tf) / float(ocp.solver_options.N_horizon),
+    )
+    cfg.constraints = extract_constraints(ocp, cfg.nx, cfg.nu)
+    cfg.cost = extract_cost(ocp, cfg.dt)
+    cfg.model = extract_model(ocp, cfg.cost, cfg.nx, cfg.nu, cfg.dt)
+    return cfg
 
-    def _extract_model(self) -> None:
-        """Extract the discretized model dynamics."""
-        x_lin, u_lin = self._extract_x_and_u_lin()
-        self.cfg.model = self._extract_discretized_dynamics(x_lin, u_lin, self.cfg.dt)
 
-    def _extract_x_and_u_lin(self) -> tuple[NDArray, NDArray]:
-        """Get linearization points for state and input."""
-        if self.cfg.cost.yref.shape[0] != (self.cfg.nx + self.cfg.nu):
-            raise ValueError(
-                "Cannot extract linearization points from yref with unexpected size. "
-                f"Expected size nx + nu = {self.cfg.nx + self.cfg.nu}, got {self.cfg.cost.yref.shape[0]}."
-            )
-
-        x_lin = self.cfg.cost.yref[:self.cfg.nx]
-        u_lin = self.cfg.cost.yref[self.cfg.nx:]
-
-        if x_lin is None:
-            raise ValueError("Cannot extract linearization point for state: x_ref is None.")
-        if u_lin is None:
-            raise ValueError("Cannot extract linearization point for input: u_ref is None.")
-
-        return x_lin, u_lin
-
-    def _extract_discretized_dynamics(self, x_lin: NDArray, u_lin: NDArray, dt: float) -> LinearSystem:
-        """Compute the discrete-time linearization (A, B, g).
-        
-        Parameters
-        ----------
-        x_lin, u_lin : NDArray
-            Linearization points for state and input.
-        dt : float
-            Sampling time.
-
-        Returns
-        -------
-        Ad, Bd : NDArray
-            Discrete-time state and input matrices.
-        gd : NDArray
-            Affine offset term so that $x^+ \\approx Ad x + Bd u + gd$.
-        """
-        if self.ocp.solver_options.integrator_type != "ERK" or self.ocp.model.f_expl_expr is None:
-            raise NotImplementedError("Only explicit ODE models are supported in this verifier.")
-
-        if self.ocp.solver_options.sim_method_num_stages is not None and np.any(self.ocp.solver_options.sim_method_num_stages != 4):
-            raise NotImplementedError("Only RK4 integration is supported in this verifier.")
-        
-        if self.ocp.solver_options.sim_method_num_steps is not None and np.any(self.ocp.solver_options.sim_method_num_steps < 1):
-            raise NotImplementedError("Number of integration steps must be at least 1.")
-
-        x = self.ocp.model.x
-        u = self.ocp.model.u
-        f_expr = self.ocp.model.f_expl_expr
-
-        return LinearSystem(*discretize_and_linearize_rk4(
-            x, u, f_expr, dt, x_lin, u_lin
-        ))
-
-    
-class LinearSystemExtractor:
-    """Extractor for AcadosOcpSolver model dynamics.
-    
-    This class extracts the nonlinear dynamics function from an `AcadosOcpSolver`
-    instance for use in Lyapunov verification routines.
-    """
-
-    def __init__(self, solver: AcadosOcpSolver) -> None:
-        self.ocp = solver.acados_ocp
-        self.cfg = MPCConfigExtractor.get_cfg(solver)
-        self.linear_system = self.cfg.model
-
-    @classmethod
-    def get_system(cls, solver: AcadosOcpSolver) -> LinearSystem:
-        """Get the linearized system matrices from the solver."""
-        extractor = cls(solver)
-        return extractor.linear_system
+def extract_cfg(solver: AcadosOcpSolver | AcadosOcpBatchSolver) -> MPCConfig | list[MPCConfig]:
+    """Extract MPC configuration from the given solver or solvers."""
+    if is_batch_solver(solver):
+        return [_extract_single_cfg(ocp_solver) for ocp_solver in solver.ocp_solvers]
+    else:
+        return _extract_single_cfg(solver)

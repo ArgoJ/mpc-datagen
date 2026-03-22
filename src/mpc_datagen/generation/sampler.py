@@ -59,16 +59,28 @@ class SamplerBase:
             raise ValueError("Bias values must be finite.")
         self.bias = bias_arr
 
-    def sample_x0(self) -> NDArray:
-        """Sample an initial state $x_0$."""
-        rand_num = self._rng.random((self.bounds.shape[1],))
+    def sample_x0(self, n: int = 1) -> NDArray:
+        """Sample one or multiple initial states.
+
+        Parameters
+        ----------
+        n : int
+            Number of samples to draw. Returns shape (n, nx) for n > 1 and shape (nx,)
+            for n == 1.
+        """
+        if n < 1:
+            raise ValueError("n must be >= 1.")
+
+        rand_num = self._rng.random((n, self.bounds.shape[1]))
         diff = self.bounds[1, :] - self.bounds[0, :]
         rand_num = self.bounds[0, :] + rand_num * diff
 
         if self.bias.size > 0:
-            return rand_num + self.bias
-        else:
-            return rand_num
+            rand_num = rand_num + self.bias
+
+        if n == 1:
+            return rand_num.reshape(-1)
+        return rand_num
 
 
 @dataclass
@@ -138,22 +150,38 @@ class UniqueBoundedSampler(SamplerBase):
             return bool(np.all(np.abs(x0 - existing_x0) <= self.min_dist))
         return bool(np.max(np.abs(x0 - existing_x0)) <= self.min_dist)
 
-    def sample_x0(self) -> NDArray:
-        """Uniformly sample an x0 within bounds, rejecting if too close to any previously accepted x0."""
+    def sample_x0(self, n: int = 1) -> NDArray:
+        """Sample one or multiple x0 values with optional uniqueness filtering."""
+        if n < 1:
+            raise ValueError("n must be >= 1.")
+
         if self._uniqueness_disabled:
-            return super().sample_x0()
+            return super().sample_x0(n)
 
-        for k in range(self.max_tries):
-            x0 = super().sample_x0()
-            if not any(self._x0_is_too_close(x0, prev) for prev in self._accepted_x0):
-                __logger__.debug(f"Accepted x0 ({x0}) after {k+1} tries.")
-                self._accepted_x0.append(x0)
-                return x0
+        accepted_batch: list[NDArray] = []
+        tries = 0
+        while len(accepted_batch) < n and tries < self.max_tries:
+            tries += 1
+            x0 = np.asarray(super().sample_x0(1), dtype=float).reshape(-1)
+            is_close_existing = any(self._x0_is_too_close(x0, prev) for prev in self._accepted_x0)
+            is_close_batch = any(self._x0_is_too_close(x0, prev) for prev in accepted_batch)
+            if is_close_existing or is_close_batch:
+                continue
 
-        raise RuntimeError(
-            f"Failed to sample a unique x0 within {self.max_tries} tries. "
-            "Try decreasing `min_dist` or increasing `max_tries`."
-        )
+            __logger__.debug(f"Accepted x0 ({x0}) after {tries} tries.")
+            accepted_batch.append(x0)
+
+        if len(accepted_batch) < n:
+            raise RuntimeError(
+                f"Failed to sample {n} unique x0 values within {self.max_tries} tries. "
+                "Try decreasing `min_dist` or increasing `max_tries`."
+            )
+
+        self._accepted_x0.extend(accepted_batch)
+        x0_arr = np.asarray(accepted_batch, dtype=float)
+        if n == 1:
+            return x0_arr.reshape(-1)
+        return x0_arr
 
     @staticmethod
     def _calculate_percentage_bounds(lbx: NDArray, ubx: NDArray, percentages: NDArray) -> NDArray:

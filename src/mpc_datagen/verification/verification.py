@@ -2,12 +2,10 @@ import numpy as np
 
 from numpy.typing import NDArray
 from collections.abc import Generator
-from acados_template import AcadosOcpSolver
 
 from .reports import *
 from .gruene import grune_required_horizon_and_alpha
-from ..extractor import MPCConfigExtractor, LinearSystemExtractor
-from ..mpc_data import MPCData, MPCDataset, MPCConfig, MPCMeta, MPCTrajectory, LinearSystem
+from ..mpc_data import MPCData, MPCDataset, MPCConfig, MPCMeta, MPCTrajectory
 from pkg_logger import get_package_logger
 
 
@@ -20,15 +18,13 @@ class StabilityVerifier:
     based on the optimal value function V_N as a Lyapunov function.
     """
 
-    def __init__(self, dataset: MPCDataset, solver: AcadosOcpSolver | None = None, only_feasible: bool = True):
+    def __init__(self, dataset: MPCDataset, only_feasible: bool = True):
         """Create a linear stability verifier over an entire dataset.
 
         Parameters
         ----------
         dataset : MPCDataset
             The dataset containing MPC trajectories and configurations.
-        solver : AcadosOcpSolver, optional
-            The Acados OCP solver instance used for linear stability verification.
         only_feasible : bool, optional
             Whether to strictly check and verify only feasible trajectory entries. Default is True.
         """
@@ -41,10 +37,7 @@ class StabilityVerifier:
         self.traj : MPCTrajectory | None = None
         self.meta : MPCMeta | None = None
         self._active_T_sim: int | None = None
-        
         self.cfg: MPCConfig | None = None
-        if isinstance(solver, AcadosOcpSolver):
-            self.cfg = MPCConfigExtractor.get_cfg(solver)
 
         self._valid_dataset_indices = self._feasible_indices() if self.only_feasible else list(range(len(self.dataset)))
 
@@ -507,7 +500,6 @@ class StabilityVerifier:
     def verify(
         cls,
         dataset: MPCDataset,
-        solver: AcadosOcpSolver | None = None,
         alpha_required: float = 1e-4,
         only_feasible: bool = True,
     ) -> StabilityReport:
@@ -517,8 +509,6 @@ class StabilityVerifier:
         ----------
         dataset : MPCDataset
             The dataset containing MPC trajectories and configurations.
-        solver : AcadosOcpSolver, optional
-            The Acados OCP solver instance used for linear stability verification.
         alpha_required : float
             Minimum empirical alpha required for verification.
         only_feasible : bool
@@ -529,7 +519,7 @@ class StabilityVerifier:
         StabilityReport
             Stability report indicating whether the dataset passes empirical checks.
         """
-        verifier = StabilityVerifier(dataset, solver, only_feasible=only_feasible)
+        verifier = StabilityVerifier(dataset, only_feasible=only_feasible)
 
         # 1. Global Descent Check (Monotonicity)
         descent_report = verifier.check_lyapunov_descent()

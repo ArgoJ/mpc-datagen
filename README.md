@@ -13,7 +13,7 @@ Generate datasets from Model Predictive Control (MPC) runs, with optional stabil
 
 - [src/mpc-datagen](src/mpc-datagen)
 	- Core data models: MPCData, MPCDataset, MPCConfig, MPCTrajectory
-	- Extraction utilities: MPCConfigExtractor, LinearSystemExtractor
+	- Extraction utilities: extract_cfg, LinearSystemExtractor
 	- Generation: MPCDataGenerator, solve_mpc_closed_loop
 	- Verification: StabilityVerifier, ROAVerifier
 

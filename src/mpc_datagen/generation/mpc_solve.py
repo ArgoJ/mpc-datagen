@@ -2,119 +2,64 @@ import time
 import numpy as np
 
 from numpy.typing import NDArray
-from acados_template import AcadosOcpSolver, AcadosSimSolver
-from dataclasses import dataclass
+from acados_template import AcadosOcpSolver, AcadosOcpBatchSolver
 
 from pkg_logger import suppress_native_output, get_package_logger
 from ..mpc_data import MPCData, MPCTrajectory, MPCMeta, MPCConfig
-from ..extractor import MPCConfigExtractor
+from ..extractor import extract_cfg, get_primary_solver, is_batch_solver
 
 __logger__ = get_package_logger(__name__)
 
 
-@dataclass
-class EpsBandConfig:
-    """
-    Configuration for epsilon band checks in closed-loop simulation.
-    
-    Parameters
-    ----------
-    eps_band : float | NDArray
-        Epsilon band around the reference output `yref` used. 
-        Can be a scalar (same band for all states) or a vector of shape (nx,) for per-state bands.  
-        Default is 1e-2.
-    eps_consecutive : int
-        Number of consecutive steps within the eps_band required to trigger a break. Must be >= 1.  
-        Default is 5.
-    """
-    eps_band: float | NDArray = 1e-2
-    eps_consecutive: int = 5
-
-    def __post_init__(self):
-        if self.eps_consecutive < 1:
-            raise ValueError("eps_consecutive must be >= 1.")
 
 
-def _resolve_eps_band(nx: int, eps_band: float | NDArray) -> NDArray:
-    """Normalize `eps_band` to a per-state vector of shape (nx,)."""
-    if np.isscalar(eps_band):
-        eps_vec = np.full(int(nx), float(eps_band), dtype=float)
-    else:
-        eps_vec = np.asarray(eps_band, dtype=float).reshape(-1)
-        if eps_vec.shape != (int(nx),):
-            raise ValueError(f"eps_band must be a scalar or shape ({int(nx)},), got {eps_vec.shape}")
-
-    if not np.all(np.isfinite(eps_vec)):
-        raise ValueError("eps_band must contain only finite values")
-    if np.any(eps_vec < 0.0):
-        raise ValueError("eps_band must be >= 0 component-wise")
-    return eps_vec
 
 
-def _in_state_band(x: NDArray, cfg: MPCConfig, eps_band: float | NDArray) -> bool:
-    """Return True if |x - x_ref| <= eps_band component-wise.
-
-    `eps_band` may be a scalar or a vector of shape (nx,) to account for different state scales.
-    """
-    x = np.asarray(x, dtype=float).reshape(-1)
-    eps_vec = _resolve_eps_band(cfg.nx, eps_band)
-    x_ref = cfg.cost.yref @ cfg.cost.Vx
-    x_ref = np.asarray(x_ref, dtype=float).reshape(-1)
-    if x_ref.shape != x.shape:
-        raise ValueError(f"x_ref shape mismatch: expected {x.shape}, got {x_ref.shape}")
-    return bool(np.all(np.abs(x - x_ref) <= eps_vec))
 
 
 def solve_mpc_closed_loop(
-    solver: AcadosOcpSolver,
-    integrator: AcadosSimSolver | None = None,
-    cfg: MPCConfig | None = None,
-    T_sim: int | None = None,
+    solver: AcadosOcpSolver | AcadosOcpBatchSolver,
+    x0: NDArray,
+    reset_solver: bool = False,
     xeps_cfg: EpsBandConfig | None = None,
-) -> MPCData:
+) -> MPCData | list[MPCData]:
     """
     Simulates a closed-loop MPC run using an Acados solver.
 
     Parameters
     ----------
-    solver : AcadosOcpSolver
-        The initialized Acados OCP solver.
-    integrator : AcadosSimSolver, optional
-        Acados integrator for accurate simulation steps.
-    cfg : MPCConfig, optional
-        Configuration dictionary to store in MPCData.
-    T_sim : int, optional
-        Number of simulation steps. If None, uses cfg.T_sim.
+    solver : AcadosOcpSolver | AcadosOcpBatchSolver
+        The initialized Acados OCP solver (single or batch).
+    x0 : NDArray
+        Initial state for the closed-loop simulation. Should have shape (batch_size, nx).
+    reset_solver : bool
+        If True, resets the solver states to zero.
     xeps_cfg : EpsBandConfig | None
         Configuration for epsilon band checks.
 
     Returns
     -------
-    MPCData
+    MPCData | list[MPCData]
         The collected data from the closed-loop run.
     """
-    if cfg is None and T_sim is None:
-        raise ValueError("Either cfg or T_sim must be provided.")
-        
-    if cfg is None:
-        cfg = MPCConfigExtractor.get_cfg(solver)
-        
-    if T_sim is not None:
-        cfg.T_sim = T_sim
-        
-    # Initialize Trajectory container with NaNs
-    traj = MPCTrajectory.empty_from_cfg(cfg)
-    
-    # Set initial state
-    traj.states[0, :] = cfg.constraints.x0.copy()
-    
-    solve_times = []
-    status_codes = []
-    
-    current_x = cfg.constraints.x0.copy()
-    is_feasible_run = True
+    cfg = extract_cfg(solver)
+    n_batch = x0.shape[0] if x0.ndim == 2 else 1
+    if (isinstance(cfg, list) and len(cfg) != n_batch) or (isinstance(cfg, MPCConfig) and n_batch != 1):
+        raise ValueError(f"Length of cfg list ({len(cfg)}) must match batch size ({n_batch}).")
+
+    data = []
+    for cfg_i, x0_i in zip(cfg, x0) if isinstance(cfg, list) else [(cfg, x0)]:
+        traj_i = MPCTrajectory.empty_from_cfg(cfg_i)
+        traj_i.states[0, :] = x0_i.flatten()
+        data_i = MPCData(config=cfg_i, trajectory=traj_i, meta=MPCMeta())
+        data.append(data_i)
+
+    current_x = x0.copy()
     in_eps_streak = 0
-    is_sqp_solver = (solver.acados_ocp.solver_options.nlp_solver_type.lower() == "sqp")
+    is_sqp_solver = _is_sqp_solver(solver)
+    nx = cfg[0].nx
+    nu = cfg[0].nu
+
     __logger__.debug(f"Starting closed-loop simulation for T_sim={cfg.T_sim} steps. SQP solver: {is_sqp_solver}")
 
     sim_start_time = time.time()
@@ -123,39 +68,39 @@ def solve_mpc_closed_loop(
 
         if is_sqp_solver:
             x_guess = np.tile(current_x, cfg.N + 1)
-            solver.set_flat("x", x_guess)
+            _set_sqp_x_guess(solver, x_guess)
 
-        solver.constraints_set(0, "lbx", current_x)
-        solver.constraints_set(0, "ubx", current_x)
-        
+        _set_initial_state_constraints(solver, current_x)
+
         with suppress_native_output(suppress_stdout=True, suppress_stderr=True):
-            status = solver.solve()
-        status_codes.append(status)
+            status = _solve_once(solver)
 
-        if status not in (0, 5):
-            __logger__.debug(f"Solver failed at step {i} with status {status}. Stopping.")
-            is_feasible_run = False
-            break
+        __failed = False
+        for data_i, status_i in zip(data, status):
+            if status_i in (0, 5):
+                data_i.meta.solver_status[i] = status_i
+                __logger__.debug(f"Solver failed at step {i} with status {status}. Stopping.")
+                __failed = True
+            else:
+                data_i.meta
+            if __failed:
+                break
 
-        solve_times.append(solver.get_stats("time_tot"))
-                
         # Retrieve Predictions
-        pred_x = np.zeros((cfg.N + 1, cfg.nx))
-        for k in range(cfg.N + 1):
-            pred_x[k, :] = solver.get(k, "x")
-            
-        pred_u = np.zeros((cfg.N, cfg.nu))
-        for k in range(cfg.N):
-            pred_u[k, :] = solver.get(k, "u")
-            
+        pred_x = solver.get_flat("x", n_batch=n_batch).reshape(-1, nx)
+        pred_u = solver.get_flat("u", n_batch=n_batch).reshape(-1, nu)
+
         # Store predictions
+        olve_times.append(solver.get_stats("time_tot"))
         traj.predicted_states[i, :, :] = pred_x
         traj.predicted_inputs[i, :, :] = pred_u
         traj.V_solver[i] = solver.get_cost()
-        
+
         # Apply Control
-        u_applied = pred_u[0, :].flatten()
+        
         traj.inputs[i, :] = u_applied
+
+        u_applied = pred_u[0:nx, :].flatten()
 
         # Optional early stop if within eps band
         should_break_eps = False
@@ -166,21 +111,9 @@ def solve_mpc_closed_loop(
             else:
                 in_eps_streak = 0
             should_break_eps = (in_eps_streak >= xeps_cfg.eps_consecutive)
-        
-        # Simulate System
-        if integrator is not None:
-            integrator.set("x", current_x)
-            integrator.set("u", u_applied)
-            
-            with suppress_native_output(suppress_stdout=True, suppress_stderr=True):
-                status_sim = integrator.solve()
-            if status_sim != 0:
-                __logger__.debug(f"Integrator failed at step {i} with status {status_sim}")
-            
-            current_x = integrator.get("x")
-        else:
-            current_x = pred_x[1, :].flatten()
-        
+
+        current_x = pred_x[1, :].flatten()
+
         traj.states[i+1, :] = current_x
 
         T_eff += 1
@@ -193,7 +126,7 @@ def solve_mpc_closed_loop(
             break
 
     sim_end_time = time.time()
-    
+
     # Construct Meta Information
     meta = MPCMeta(
         timestamp=time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(sim_start_time)),

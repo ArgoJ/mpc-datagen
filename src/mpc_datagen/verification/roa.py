@@ -28,7 +28,7 @@ class ROAVerifier:
     def _solve_lqr(self):
         """Internal method: Solves Riccati equation based on Config costs."""
         # NOTE: cfg.model.A/B are already discrete-time matrices as extracted from acados
-        # (see MPCConfigExtractor._extract_discretized_dynamics). Do NOT discretize again.
+        # (see extract_cfg._extract_discretized_dynamics). Do NOT discretize again.
         A = np.asarray(self.cfg.model.A, dtype=float)
         B = np.asarray(self.cfg.model.B, dtype=float)
 
