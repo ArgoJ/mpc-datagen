@@ -214,6 +214,5 @@ __marimo__/
 
 # custom
 *.hdf5
-data/*
-plots/*
+results/*
 .vscode/**

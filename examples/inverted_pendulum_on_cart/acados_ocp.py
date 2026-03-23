@@ -275,7 +275,7 @@ def get_ocp_solver(
     return solver, info
 
 
-def get_batch_ocp_solvers(
+def get_batch_ocp_solver(
     Q: NDArray, 
     R: NDArray,
     dt: float = 0.05, 

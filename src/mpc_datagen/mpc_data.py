@@ -48,6 +48,19 @@ def _values_equal(a, b) -> bool:
     return a == b
 
 
+def _to_json_compatible(value: Any) -> Any:
+    """Convert NumPy-backed values recursively to JSON-serializable Python types."""
+    if isinstance(value, dict):
+        return {str(k): _to_json_compatible(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_json_compatible(v) for v in value]
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
 # ==== Base Data and Dataset Classes ====
 TData = TypeVar("TData", bound="BaseData")
 TDataset = TypeVar("TDataset", bound="BaseDataset[Any]")
@@ -74,7 +87,7 @@ class BaseDataset(Generic[TData]):
         data_buffer: list[TData] | None = None,
         grp_prefix: str | None = None,
         data_cls: type[TData] | None = None,
-        view_indices: list[str] | None = None,
+        view_indices: list[int] | None = None,
     ):
         self.file_path = Path(file_path) if file_path else None
         self.memory_buffer = data_buffer if data_buffer else []
@@ -89,9 +102,21 @@ class BaseDataset(Generic[TData]):
             self._h5_file = h5py.File(self.file_path, 'r')
             self._indices = self._collect_indices(self._h5_file)
         
-        # TODO: this always is 0 if new dataset where something is added.
-        total_len = len(self._indices) + len(self.memory_buffer)
-        self.view_indices = view_indices if view_indices is not None else list(range(total_len))
+        if view_indices is not None:
+            self.view_indices = list(view_indices)
+        else:
+            total_len = len(self._indices) + len(self.memory_buffer)
+            self.view_indices = list(range(total_len))
+
+    def _make_view(self: TDataset, view_indices: list[int]) -> TDataset:
+        """Create a dataset view that shares backing storage but applies a new index mapping."""
+        return cast(TDataset, self.__class__(
+            file_path=self.file_path,
+            data_buffer=self.memory_buffer,
+            grp_prefix=self.grp_prefix,
+            data_cls=self.data_cls,
+            view_indices=view_indices,
+        ))
 
     def _extract_index(self, key: str) -> int:
         try:
@@ -141,20 +166,19 @@ class BaseDataset(Generic[TData]):
                 new_view = self.view_indices[idx]
             else:
                 new_view = [self.view_indices[i] for i in idx]
-            
-            return cast(TDataset, self.__class__(
-                file_path=self.file_path,
-                data_buffer=self.memory_buffer,
-                grp_prefix=self.grp_prefix,
-                data_cls=self.data_cls,
-                view_indices=new_view           # new mask
-            ))
+
+            return self._make_view(new_view)
+        
+        if not isinstance(idx, int):
+            raise TypeError(f"Indices must be integers, slices, or lists of integers, not {type(idx)}")
 
         idx = self._normalize_index(idx)
         real_idx = self.view_indices[idx]
         
-        if real_idx < len(self.memory_buffer):
-            return self.memory_buffer[real_idx]
+        num_file_entries = len(self._indices)
+        if real_idx >= num_file_entries:
+            buffer_idx = real_idx - num_file_entries
+            return self.memory_buffer[buffer_idx]
         
         grp = self.get_grp(real_idx)
         return self._deserialize_entry(grp)
@@ -170,6 +194,8 @@ class BaseDataset(Generic[TData]):
         if self._h5_file: self._h5_file.close()
         self._h5_file = h5py.File(self.file_path, 'r')
         self._indices = self._collect_indices(self._h5_file)
+        total_len = len(self._indices)
+        self.view_indices = list(range(total_len))
 
     def _save_entries(self, f: h5py.File, start_idx: int, **entry_kwargs: Any) -> None:
         for i, entry in enumerate(self.memory_buffer):
@@ -180,7 +206,7 @@ class BaseDataset(Generic[TData]):
         return len([k for k in f.keys() if k.startswith(self.grp_prefix)])
 
     def get_grp(self, idx: int) -> h5py.Group:
-        file_idx = idx - len(self.memory_buffer)
+        file_idx = idx
         if file_idx < 0 or file_idx >= len(self._indices):
             raise IndexError("Dataset file index out of range")
         if self._h5_file is None:
@@ -194,6 +220,8 @@ class BaseDataset(Generic[TData]):
     def add(self, entry: TData):
         """Add to temporary memory buffer (for generation phase)."""
         self.memory_buffer.append(entry)
+        new_real_idx = len(self._indices) + len(self.memory_buffer) - 1
+        self.view_indices.append(new_real_idx)
         
     def save(self, path: Path = None, mode: str = 'w', **entry_kwargs: Any) -> None:
         """Flushes memory buffer to HDF5."""
@@ -268,12 +296,13 @@ class MPCMeta:
     def from_hdf5(cls, grp: h5py.Group) -> "MPCMeta":
         """Load metadata from JSON attribute in the provided group."""
         meta_json = grp.attrs.get("meta", "{}")
-        meta_dict = json.loads(meta_json)
+        meta_dict = _to_json_compatible(json.loads(meta_json))
         return cls(**meta_dict)
 
     def to_hdf5(self, grp: h5py.Group) -> None:
         """Save metadata as JSON attribute in the provided group."""
-        grp.attrs["meta"] = json.dumps(asdict(self))
+        meta_dict = _to_json_compatible(asdict(self))
+        grp.attrs["meta"] = json.dumps(meta_dict)
 
 @dataclass
 class LinearSystem:
@@ -1252,13 +1281,26 @@ class MPCDataset(BaseDataset[MPCData]):
     DATA_CLS = MPCData
     DEFAULT_GRP_PREFIX = "traj_"
 
-    def __init__(self, file_path: str | None = None, data_buffer: list[MPCData] | None = None):
-        super().__init__(file_path=file_path, data_buffer=data_buffer, grp_prefix=self.DEFAULT_GRP_PREFIX, data_cls=self.DATA_CLS)
+    def __init__(
+        self,
+        file_path: str | None = None,
+        data_buffer: list[MPCData] | None = None,
+        grp_prefix: str | None = None,
+        data_cls: type[MPCData] | None = None,
+        view_indices: list[int] | None = None,
+    ):
+        super().__init__(
+            file_path=file_path,
+            data_buffer=data_buffer,
+            grp_prefix=grp_prefix or self.DEFAULT_GRP_PREFIX,
+            data_cls=data_cls or self.DATA_CLS,
+            view_indices=view_indices,
+        )
 
     def add(self, entry: MPCData):
         """Add to temporary memory buffer (for generation phase)."""
-        entry.meta.id = len(self)  # Assign ID based on current length
-        self.memory_buffer.append(entry)
+        entry.meta.id = len(self._indices) + len(self.memory_buffer)
+        super().add(entry)
 
     def save(self, path: Path = None, mode: str = 'w', save_ocp_trajs: bool = True) -> None:
         """Flushes memory buffer to HDF5."""
@@ -1357,6 +1399,14 @@ class MPCDataset(BaseDataset[MPCData]):
     def global_config(self) -> MPCConfig:
         """Returns the global configuration if available, otherwise raises an error."""
         return MPCConfig.load_global(self._h5_file)
+
+    def finalize(self, recalculate_costs: bool = False, truncate: bool = False) -> None:
+        """Finalizes all entries in the dataset and returns a validation report."""
+        for idx, entry in enumerate(self):
+            try:
+                entry.finalize(recalculate_costs=recalculate_costs, truncate=truncate)
+            except Exception as e:
+                __logger__.error(f"Error finalizing entry ID {getattr(entry.meta, 'id', idx)}: {e}")
 
     def validate(
         self,

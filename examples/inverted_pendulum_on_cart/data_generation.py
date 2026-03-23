@@ -22,7 +22,7 @@ from mpc_datagen.verification import (
     ROAVerifier,
 )
 
-from acados_ocp import get_batch_ocp_solvers
+from acados_ocp import get_batch_ocp_solver, get_ocp_solver
 from pkg_logger import get_package_logger
 
 __logger__ = get_package_logger("mpc_datagen")
@@ -77,12 +77,12 @@ def main():
         __logger__.setLevel(logging.DEBUG)
 
     # Cost matrices
-    Q = np.diag([1e1, 1e-2, 1e2, 1e-2])
+    Q = np.diag([1e2, 1e1, 1e2, 1e-2])
     R = np.diag([1e-2])
 
     # Sample in a tighter local region around the equilibrium to improve feasibility
     sample_percentages = np.array([1.0, 1.0, 0.333, 1.0], dtype=float)
-    sample_bias = np.array([0.0, 0.0, 0.0, 0.0], dtype=float)
+    sample_bias = np.array([0.0, 0.0, np.pi, 0.0], dtype=float)
 
     base_path = Path(args.base_path) / datetime.now().strftime('%Y%m%d_%H%M%S')
 
@@ -91,14 +91,14 @@ def main():
     N = 40
 
     dt = 0.05
-    solvers, info = get_batch_ocp_solvers(
+    solver, info = get_batch_ocp_solver(
         Q, R,
         dt=dt,
         N=N,
-        terminal_mode="none",
+        terminal_mode="regional",
     )
 
-    constraints = solvers.ocp_solvers[0].acados_ocp.constraints
+    constraints = solver.ocp_solvers[0].acados_ocp.constraints if hasattr(solver, "ocp_solvers") else solver.acados_ocp.constraints
     bounds = np.vstack((constraints.lbx, constraints.ubx))
 
     sampler = UniqueBoundedSampler(
@@ -113,11 +113,10 @@ def main():
         eps_consecutive=3
     )
     generator = MPCDataGenerator(
-        solver=solvers,
+        solver=solver,
         T_sim=T_sim,
         sampler=sampler,
         xeps_cfg=eps_cfg,
-        reset_solver=True,
         solver_regen_interval=20,
     )
     dataset = generator.generate(n_samples=n_samples, only_feasible=True)
@@ -125,7 +124,7 @@ def main():
     dataset.validate(tol_stability=0.1)
     dataset.save(f"{base_path}/inverted_pendulum_on_cart_N{N}_data.hdf5")
 
-    veri_stats = StabilityVerifier.verify(dataset, solvers, alpha_required=1e-4)
+    veri_stats = StabilityVerifier.verify(dataset, alpha_required=1e-4)
     VerificationRender(veri_stats).render()
 
     P = info["P"]
@@ -134,7 +133,7 @@ def main():
     roa_cert = ROAVerifier(dataset[0].config)
     roa_bounds, c_min = roa_cert.roa_bounds()
 
-    alpha = 1.0 if veri_stats.details.get("asym_stab_report", None) is None else veri_stats.details["asym_stab_report"].min_alpha
+    alpha = 1.0  #if veri_stats.details.get("asym_stab_report", None) is None else veri_stats.details["asym_stab_report"].min_alpha
     mdg_plots.all(
         dataset=dataset[:min(150, n_samples)],
         state_labels=["x", "v", "theta", "theta_dot"],
