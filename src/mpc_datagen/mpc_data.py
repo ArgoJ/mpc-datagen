@@ -74,6 +74,7 @@ class BaseDataset(Generic[TData]):
         data_buffer: list[TData] | None = None,
         grp_prefix: str | None = None,
         data_cls: type[TData] | None = None,
+        view_indices: list[str] | None = None,
     ):
         self.file_path = Path(file_path) if file_path else None
         self.memory_buffer = data_buffer if data_buffer else []
@@ -87,6 +88,10 @@ class BaseDataset(Generic[TData]):
         if self.file_path and self.file_path.exists():
             self._h5_file = h5py.File(self.file_path, 'r')
             self._indices = self._collect_indices(self._h5_file)
+        
+        # TODO: this always is 0 if new dataset where something is added.
+        total_len = len(self._indices) + len(self.memory_buffer)
+        self.view_indices = view_indices if view_indices is not None else list(range(total_len))
 
     def _extract_index(self, key: str) -> int:
         try:
@@ -115,35 +120,43 @@ class BaseDataset(Generic[TData]):
         entry.to_hdf5(grp, **kwargs)
 
     def _normalize_index(self, idx: int) -> int:
-        if idx < 0:
-            idx += len(self)
         if idx < 0 or idx >= len(self):
-            raise IndexError("Dataset index out of range")
+            raise IndexError(f"Dataset index out of range [0, {len(self)}), got {idx}")
         return idx
 
     def __len__(self) -> int:
-        return len(self._indices) + len(self.memory_buffer)
+        return len(self.view_indices)
 
     @overload
     def __getitem__(self, idx: int) -> TData:
         ...
 
     @overload
-    def __getitem__(self: TDataset, idx: slice) -> TDataset:
+    def __getitem__(self: TDataset, idx: slice | list[int]) -> TDataset:
         ...
 
-    def __getitem__(self: TDataset, idx: int | slice) -> TData | TDataset:
-        if isinstance(idx, slice):
-            start, stop, step = idx.indices(len(self))
-            subset_data = [self[i] for i in range(start, stop, step or 1)]
-            return cast(TDataset, self.__class__(data_buffer=subset_data))
+    def __getitem__(self: TDataset, idx: int | slice | list[int]) -> TData | TDataset:
+        if isinstance(idx, (slice, list)):
+            if isinstance(idx, slice):
+                new_view = self.view_indices[idx]
+            else:
+                new_view = [self.view_indices[i] for i in idx]
+            
+            return cast(TDataset, self.__class__(
+                file_path=self.file_path,
+                data_buffer=self.memory_buffer,
+                grp_prefix=self.grp_prefix,
+                data_cls=self.data_cls,
+                view_indices=new_view           # new mask
+            ))
+
         idx = self._normalize_index(idx)
+        real_idx = self.view_indices[idx]
         
-        # Check memory buffer first
-        if idx < len(self.memory_buffer):
-            return self.memory_buffer[idx]
+        if real_idx < len(self.memory_buffer):
+            return self.memory_buffer[real_idx]
         
-        grp = self.get_grp(idx)
+        grp = self.get_grp(real_idx)
         return self._deserialize_entry(grp)
 
     def __iter__(self) -> Iterator[TData]:

@@ -2,12 +2,12 @@ import os
 import shutil
 import tempfile
 import numpy as np
+from datetime import datetime, timezone
 
 from numpy.typing import NDArray
 from acados_template import AcadosOcpSolver, AcadosOcp, AcadosOcpBatchSolver
 from dataclasses import replace, dataclass
 
-from .mpc_solve import solve_mpc_closed_loop
 from .sampler import SamplerBase
 from ..extractor import get_primary_solver, resolve_solver, extract_cfg, is_batch_solver
 from ..mpc_data import MPCDataset, MPCConfig, MPCData, MPCMeta, MPCTrajectory
@@ -67,43 +67,6 @@ class EpsBandConfig:
             raise ValueError(f"x must have shape (B, {cfg.nx}), got {x.shape}")
         return np.all(np.abs(x - x_ref[None, :]) <= self.eps_band[None, :], axis=1)
 
-def _set_initial_state_constraints(
-    solver: AcadosOcpSolver | AcadosOcpBatchSolver,
-    current_x: NDArray,
-) -> None:
-    if is_batch_solver(solver):
-        current_x = np.asarray(current_x, dtype=float).reshape(1, -1)
-    solver.constraints_set(0, "lbx", current_x)
-    solver.constraints_set(0, "ubx", current_x)
-
-def _set_x_guess(
-    solver: AcadosOcpSolver | AcadosOcpBatchSolver,
-    x_guess: NDArray,
-) -> None:
-    if is_batch_solver(solver):
-        solver.set_flat("x", np.asarray(x_guess, dtype=float).reshape(1, -1))
-    else:
-        solver.set_flat("x", x_guess)
-
-def _is_sqp_solver(solver: AcadosOcpSolver | AcadosOcpBatchSolver) -> bool:
-    primary_solver = get_primary_solver(solver)
-    return primary_solver.acados_ocp.solver_options.nlp_solver_type.lower() == "sqp"
-
-def _solve_once(
-    solver: AcadosOcpSolver | AcadosOcpBatchSolver,
-    x0: NDArray,
-    x_guess: NDArray | None = None,
-) -> int | list[int]:
-    _set_initial_state_constraints(solver, x0)
-    if x_guess is not None:
-        _set_x_guess(solver, x_guess)
-    with suppress_native_output(suppress_stdout=True, suppress_stderr=True):
-        if is_batch_solver(solver):
-            solver.solve(n_batch=1)
-            return solver.status
-        return solver.solve()
-
-
 
 class MPCDataGenerator:
     """
@@ -146,6 +109,12 @@ class MPCDataGenerator:
         self.xeps_cfg = xeps_cfg
         self.sampler = sampler
         self._resolve()
+
+        self.iter_count = 0
+        self.generated_count = 0
+        self.feasible_count = 0
+        self.batch_size = self.solver.n_batch_current if is_batch_solver(self.solver) else 1
+        self.is_sqp = self._is_sqp_solver()
     
     def _resolve(self) -> None:
         temp_solver = resolve_solver(self.solver)
@@ -179,73 +148,143 @@ class MPCDataGenerator:
             ))
         return dataset
 
-    # @staticmethod
-    # def _regenerate_solver(
-    #     solver: AcadosOcpSolver | AcadosOcpBatchSolver,
-    # ) -> AcadosOcpSolver | AcadosOcpBatchSolver:
-    #     """
-    #     Regenerates the solver instance to reset its internal state.
-    #     """
-    #     with suppress_native_output(suppress_stdout=True, suppress_stderr=True):
-    #         if is_batch_solver(solver):
-    #             return AcadosOcpBatchSolver(
-    #                 ocp=solver.ocp_solvers[0].acados_ocp,
-    #                 N_batch_init=solver.n_batch_current,
-    #                 build=False,
-    #                 generate=False,
-    #                 verbose=False,
-    #                 check_code_reuse_possible=True,
-    #             )
+    @property
+    def feasibility_percentage(self) -> float:
+        return self.feasible_count / self.iter_count * 100 if self.iter_count > 0 else 0.0
+    
+    def _set_x0(self, x0: NDArray) -> None:
+        if not is_batch_solver(self.solver):
+            x0 = np.asarray(x0, dtype=float).flatten()
+        self.solver.constraints_set(0, "lbx", x0)
+        self.solver.constraints_set(0, "ubx", x0)
 
-    #         return AcadosOcpSolver(
-    #             solver.acados_ocp,
-    #             build=False,
-    #             check_reuse_possible=True,
-    #         )
+    def _set_x_guess(self, x_guess: NDArray) -> None:
+        if not is_batch_solver(self.solver):
+            x_guess = np.asarray(x_guess, dtype=float).flatten()
+        self.solver.set_flat("x", x_guess)
+    
+    def _get_x_guess(self, x0: NDArray, x: NDArray) -> NDArray:
+        primary_solver = get_primary_solver(self.solver)
+        return np.tile(x0, primary_solver.acados_ocp.dims.N + 1)
 
-    # def cleanup(self) -> None:
-    #     """Cleans up temporary files and resources associated with the solver."""
-    #     if self.solver is None:
-    #         return
+    def _is_sqp_solver(self) -> bool:
+        primary_solver = get_primary_solver(self.solver)
+        return primary_solver.acados_ocp.solver_options.nlp_solver_type.lower() == "sqp"
 
-    #     solver = self.solver
-    #     cleanup_solver = get_primary_solver(solver)
-
-    #     tmp_dir = getattr(solver, "_mpc_datagen_temp_dir", None)
-    #     if isinstance(tmp_dir, str) and tmp_dir:
-    #         try:
-    #             shutil.rmtree(tmp_dir, ignore_errors=True)
-    #         except Exception as err:
-    #             __logger__.debug(f"Temporary solver directory cleanup failed: {err}")
-    #     else:
-    #         json_file = getattr(cleanup_solver.acados_ocp, "json_file", None)
-    #         code_export_directory = getattr(cleanup_solver.acados_ocp, "code_export_directory", None)
-
-    #         if isinstance(json_file, str) and json_file:
-    #             try:
-    #                 if os.path.isfile(json_file):
-    #                     os.remove(json_file)
-    #             except Exception as err:
-    #                 __logger__.debug(f"Failed to remove solver json file '{json_file}': {err}")
-
-    #         if isinstance(code_export_directory, str) and code_export_directory:
-    #             try:
-    #                 if os.path.isdir(code_export_directory):
-    #                     shutil.rmtree(code_export_directory, ignore_errors=True)
-    #             except Exception as err:
-    #                 __logger__.debug(
-    #                     f"Failed to remove solver code export directory '{code_export_directory}': {err}"
-    #                 )
-
-    #     self.solver = None
-
-
-    # def __del__(self) -> None:
-    #     try:
-    #         self.cleanup()
-    #     except Exception:
-    #         pass
+    def _solve_once(self, n: int) -> None:
+        with suppress_native_output(suppress_stdout=True, suppress_stderr=True):
+            if is_batch_solver(self.solver):
+                self.solver.solve(n_batch=n)
+            else:
+                self.solver.solve()
+        return self._get_status(n)
         
+    def _get_status(self, n: int) -> int | list[int]:
+        if is_batch_solver(self.solver):
+            return self.solver.status[:n]
+        return self.solver.status
+    
+    def _get_x(self, n: int) -> NDArray:
+        return self.solver.get_flat("x", n_batch=n).reshape(n, self.mpc_cfg.N + 1, self.mpc_cfg.nx)
+    
+    def _get_u(self, n: int) -> NDArray:
+        return self.solver.get_flat("u", n_batch=n).reshape(n, self.mpc_cfg.N, self.mpc_cfg.nu)
+
+    def _get_cost_batch(self, n: int) -> NDArray:
+        if is_batch_solver(self.solver):
+            return np.asarray([
+                self.solver.ocp_solvers[i].get_cost()
+                for i in range(n)
+            ], dtype=float)
+        return np.asarray([float(self.solver.get_cost())], dtype=float)
+
+    def _get_time_batch(self, n: int) -> NDArray:
+        if is_batch_solver(self.solver):
+            return np.asarray([
+                self.solver.ocp_solvers[i].get_stats("time_tot")
+                for i in range(n)
+            ], dtype=float)
+        return np.asarray([float(self.solver.get_stats("time_tot"))], dtype=float)
+
+    @staticmethod
+    def _is_feasible_status(status: int) -> bool:
+        return status in (0, 5)
+
+    def _in_eps_band(self, x: NDArray) -> bool:
+        if self.xeps_cfg is None:
+            return False
+        x_arr = np.asarray(x, dtype=float).reshape(1, -1)
+        return bool(self.xeps_cfg.in_state_band(x_arr, self.mpc_cfg)[0])
+
+    def _in_eps_band_batch(self, x: NDArray) -> NDArray:
+        if self.xeps_cfg is None:
+            return np.zeros((x.shape[0],), dtype=bool)
+        x_arr = np.asarray(x, dtype=float)
+        if x_arr.ndim == 1:
+            x_arr = x_arr.reshape(1, -1)
+        return self.xeps_cfg.in_state_band(x_arr, self.mpc_cfg)
+
+    def _new_empty_entry(self, data_idx: int) -> MPCData:
+        entry = MPCData(
+            config=self.mpc_cfg,
+            trajectory=MPCTrajectory.empty_from_cfg(self.mpc_cfg),
+            meta=MPCMeta(id=data_idx),
+        )
+        return entry
+
+    def _fill_dataset(self, dataset: MPCDataset, idxs: list[int]) -> None:
+        if not idxs:
+            return
+
+        n = len(idxs)
+        x_batch = self._get_x(n)
+        u_batch = self._get_u(n)
+        status_batch = np.asarray(self._get_status(n), dtype=int).reshape(-1)
+        cost_batch = self._get_cost_batch(n)
+        time_batch = self._get_time_batch(n)
+
+        if status_batch.shape[0] != n:
+            raise ValueError(f"Status batch length mismatch: expected {n}, got {status_batch.shape[0]}")
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        for batch_idx, data_idx in enumerate(idxs):
+            entry = dataset[data_idx]
+            traj = entry.trajectory
+            meta = entry.meta
+            cfg = entry.config
+
+            k = int(meta.steps_simulated)
+            if k >= int(cfg.T_sim):
+                continue
+
+            x_pred = x_batch[batch_idx]
+            u_pred = u_batch[batch_idx]
+            status = int(status_batch[batch_idx])
+            solve_time = float(time_batch[batch_idx])
+            cost = float(cost_batch[batch_idx])
+
+            traj.states[k, :] = x_pred[0, :]
+            if k + 1 < traj.states.shape[0]:
+                traj.states[k + 1, :] = x_pred[1, :]
+            traj.inputs[k, :] = u_pred[0, :]
+            traj.V_solver[k] = cost
+
+            if traj.predicted_states is not None and k < traj.predicted_states.shape[0]:
+                traj.predicted_states[k, :, :] = x_pred
+            if traj.predicted_inputs is not None and k < traj.predicted_inputs.shape[0]:
+                traj.predicted_inputs[k, :, :] = u_pred
+
+            if not meta.timestamp:
+                meta.timestamp = now_iso
+            meta.steps_simulated = k + 1
+            meta.status_codes.append(status)
+            meta.solve_time_total += solve_time
+            meta.solve_time_max = max(meta.solve_time_max, solve_time)
+            meta.solve_time_mean = meta.solve_time_total / max(meta.steps_simulated, 1)
+            step_feasible = self._is_feasible_status(status)
+            meta.feasible = step_feasible if len(meta.status_codes) == 1 else (meta.feasible and step_feasible)
+
 
     def generate(self, n_samples: int, only_feasible: bool = False) -> MPCDataset:
         """
@@ -266,55 +305,108 @@ class MPCDataGenerator:
         if self.solver is None:
             raise RuntimeError("Solver is not available. The generator may have been cleaned up.")
 
-        feasible_count = 0
-        iter_count = 0
-        consequtive_infeasible = 0
-        batch_size = self.solver.n_batch_current if is_batch_solver(self.solver) else 1
-
         dataset = self._generate_empty_dataset(self.mpc_cfg, n_samples)
+        active_slots = min(self.batch_size, n_samples)
+        active_idxs = np.arange(active_slots, dtype=int)
+        next_data_idx = active_slots
+
+        current_x0 = np.full((self.batch_size, self.mpc_cfg.nx), np.nan)
+        current_x_flat = np.full((self.batch_size, self.mpc_cfg.nx * (self.mpc_cfg.N + 1)), np.nan)
+        eps_hits = np.zeros(self.batch_size, dtype=int)
+
+        x0_init = self.sampler.sample_x0(active_slots)
+        current_x0[:active_slots, :] = x0_init
+        current_x_flat[:active_slots, :] = np.tile(x0_init, (1, self.mpc_cfg.N + 1))
+
         with __logger__.tqdm(total=n_samples, desc="Generating Trajectories") as pbar:
-            while len(dataset) < n_samples:
-                n_remaining = n_samples - len(dataset)
-                n_draw = min(batch_size, n_remaining)
+            while self.generated_count < n_samples:
+                n_active = int(active_idxs.shape[0])
+                if n_active == 0:
+                    break
 
-                if self.reset_solver:
-                    self.solver.reset()
+                self._set_x0(current_x0)
+                if self.is_sqp:
+                    self._set_x_guess(current_x_flat)
 
-                try:
-                    mpc_data = solve_mpc_closed_loop(
-                        solver=self.solver,
-                        cfg=temp_cfg,
-                        xeps_cfg=self.xeps_cfg,
-                    )
-                except Exception:
-                    self.cleanup()
-                    raise
+                self._solve_once(n_active)
+                self._fill_dataset(dataset, active_idxs.tolist())
 
-                mpc_data_list = mpc_data if isinstance(mpc_data, list) else [mpc_data]
+                x_pred_batch = self._get_x(n_active)
+                current_x_flat[:n_active, :] = x_pred_batch.reshape(n_active, -1)
+                current_x0[:n_active, :] = x_pred_batch[:, 1, :]
 
-                for sample in mpc_data_list:
-                    iter_count += 1
-                    if not only_feasible or sample.is_feasible():
-                        dataset.add(sample)
-                        feasible_count += 1
-                        consequtive_infeasible = 0
-                        pbar.update(1)
+                solved_status = np.asarray(self._get_status(n_active), dtype=int).reshape(-1)
+
+                keep_mask = np.ones(n_active, dtype=bool)
+                refill_slots: list[int] = []
+
+                step_feasible = np.isin(solved_status, (0, 5))
+                in_eps = self._in_eps_band_batch(current_x0[:n_active, :])
+                eps_hits[:n_active] = np.where(step_feasible & in_eps, eps_hits[:n_active] + 1, 0)
+
+                steps = np.asarray([dataset[int(idx)].meta.steps_simulated for idx in active_idxs], dtype=int)
+                reached_tsim = steps >= int(self.mpc_cfg.T_sim)
+                reached_eps = (
+                    self.xeps_cfg is not None
+                    and np.asarray(eps_hits[:n_active] >= int(self.xeps_cfg.eps_consecutive), dtype=bool)
+                )
+                stop_mask = (~step_feasible) | reached_tsim | reached_eps
+                stopped_slots = np.flatnonzero(stop_mask)
+
+                if stopped_slots.size > 0:
+                    if is_batch_solver(self.solver):
+                        for slot in stopped_slots.tolist():
+                            self.solver.ocp_solvers[slot].reset()
                     else:
-                        consequtive_infeasible += 1
+                        self.solver.reset()
 
-                    if self.solver_regen_interval is not None and consequtive_infeasible >= self.solver_regen_interval:
-                        __logger__.debug((
-                            f"{consequtive_infeasible} consecutive infeasible trajectories. "
-                            "Regenerating solver to reset internal state."
-                        ))
-                        self.solver = self._regenerate_solver(self.solver)
-                        consequtive_infeasible = 0
+                    if only_feasible:
+                        accepted_mask = stop_mask & step_feasible
+                    else:
+                        accepted_mask = stop_mask
 
-                    if len(dataset) >= n_samples:
-                        break
+                    accepted_slots = np.flatnonzero(accepted_mask)
+                    if accepted_slots.size > 0:
+                        self.generated_count += int(accepted_slots.size)
+                        self.iter_count += int(accepted_slots.size)
+                        accepted_entries_feasible = np.asarray(
+                            [dataset[int(active_idxs[s])].meta.feasible for s in accepted_slots],
+                            dtype=bool,
+                        )
+                        self.feasible_count += int(np.sum(accepted_entries_feasible))
+                        pbar.update(int(accepted_slots.size))
 
-                feasible_percentage = feasible_count / iter_count * 100 if iter_count > 0 else 0.0
-                pbar.set_postfix_str(f"feasible: {feasible_percentage:.1f}%")
+                    rejected_slots = np.flatnonzero(stop_mask & (~accepted_mask))
+                    for slot in rejected_slots.tolist():
+                        data_idx = int(active_idxs[slot])
+                        dataset.memory_buffer[data_idx] = self._new_empty_entry(data_idx)
+
+                    for slot in stopped_slots.tolist():
+                        if slot in rejected_slots:
+                            refill_slots.append(slot)
+                            continue
+
+                        keep_mask[slot] = False
+                        if next_data_idx < n_samples:
+                            active_idxs[slot] = next_data_idx
+                            dataset.memory_buffer[next_data_idx] = self._new_empty_entry(next_data_idx)
+                            refill_slots.append(slot)
+                            keep_mask[slot] = True
+                            next_data_idx += 1
+
+                if refill_slots:
+                    refill_arr = np.asarray(refill_slots, dtype=int)
+                    x0_new = self.sampler.sample_x0(refill_arr.size)
+                    current_x0[refill_arr, :] = x0_new
+                    current_x_flat[refill_arr, :] = np.tile(x0_new, (1, self.mpc_cfg.N + 1))
+                    eps_hits[refill_arr] = 0
+
+                active_idxs = active_idxs[keep_mask]
+                current_x0[:active_idxs.shape[0], :] = current_x0[:n_active, :][keep_mask, :]
+                current_x_flat[:active_idxs.shape[0], :] = current_x_flat[:n_active, :][keep_mask, :]
+                eps_hits[:active_idxs.shape[0]] = eps_hits[:n_active][keep_mask]
+
+                pbar.set_postfix_str(f"feasible: {self.feasibility_percentage:.1f}%")
 
         return dataset
 

@@ -285,9 +285,17 @@ def get_batch_ocp_solvers(
     sys_cfg: PendulumOnCartConfig = PendulumOnCartConfig(),
 ) -> tuple[AcadosOcpBatchSolver, dict]:
     ocp, info = get_ocp(Q, R, dt, N, terminal_mode, sys_cfg)
+    
+    num_threads = min(batch_size, os.cpu_count() or 1)
+    # Acados batch solver template requires these attributes
     ocp.solver_options.with_batch_functionality = True
-    ocp.solver_options.num_threads_in_batch_solve = min(
-        batch_size, os.cpu_count() or 1
+    ocp.solver_options.num_threads_in_batch_solve = num_threads
+
+    batch_solver = AcadosOcpBatchSolver(
+        ocp,
+        N_batch_init=batch_size,
+        num_threads_in_batch_solve=num_threads,
+        json_file=f"{ocp.model.name}_batch_ocp.json",
+        verbose=False
     )
-    batch_solver = AcadosOcpBatchSolver(ocp, N_batch_init=batch_size, json_file=f"{ocp.model.name}_batch_ocp.json", verbose=False)
     return batch_solver, info

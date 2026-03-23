@@ -1,6 +1,5 @@
-from .generate import MPCDataGenerator, get_temp_solver
+from .generate import MPCDataGenerator, get_temp_solver, EpsBandConfig
 from .sampler import UniqueBoundedSampler, SamplerBase
-from .mpc_solve import EpsBandConfig
 
 __all__ = [
     "MPCDataGenerator",
