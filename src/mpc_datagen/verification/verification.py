@@ -435,10 +435,20 @@ class StabilityVerifier:
             unit="trajectory",
         ) as pbar:
             for _ in pbar:
-                gamma = float(np.max(self.gamma_estimates()))
+                gamma_list = self.gamma_estimates()
+                if not gamma_list:
+                    continue
+
+                gamma = float(np.max(gamma_list))
                 if gamma > max_gamma:
                     max_gamma = gamma
                     pbar.set_postfix_str(f"γ: {max_gamma:.3f}")
+        
+        if max_gamma == 0.0:
+            return GrüneHorizonReport(
+                applicability=False,
+                message="NOT APPLICABLE: Insufficient data to estimate gamma (l*(x) close to 0)."
+            )
 
         N_required, alpha_N = grune_required_horizon_and_alpha(gamma=max_gamma, N=N)
         stable_flag = bool((N >= N_required) and (alpha_N > 0.0))
