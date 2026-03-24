@@ -575,15 +575,16 @@ def relaxed_dp_residual(
         return None
 
     fig = go.Figure()
+    if 0.0 >= alpha or alpha > 1.0:
+        __logger__.warning(f"alpha must be in the range (0, 1], got {alpha}. Setting alpha=1.0.")
+        alpha = 1.0
+
     if alpha == 1.0:
         title = r"$\text{DP Lyapunov residual: } s_n = V_N(x_{n+1}) - V_N(x_n) + \ell(x_n,u_n)$"
-    elif alpha < 1.0 and alpha >= 0.0:
+    elif alpha < 1.0:
         title = r"$\text{Relaxed DP Lyapunov residual: } s_n(\alpha) = V_N(x_{n+1}) - V_N(x_n) + \alpha \ell(x_n,u_n) \text{ with } \alpha = " + f"{alpha:.3f}$"
-    else:
-        raise ValueError("alpha must be in the range (0, 1].")
 
     per_entry = []  # list of tuples (id, deltas)
-
     for entry in dataset:
         traj = entry.trajectory
         cost = entry.config.cost

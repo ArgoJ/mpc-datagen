@@ -3,8 +3,8 @@ import shutil
 import tempfile
 import copy
 import numpy as np
-from datetime import datetime, timezone
 
+from datetime import datetime, timezone
 from numpy.typing import NDArray
 from acados_template import AcadosOcpSolver, AcadosOcp, AcadosOcpBatchSolver
 from dataclasses import replace, dataclass
@@ -89,6 +89,7 @@ class MPCDataGenerator:
         xeps_cfg: EpsBandConfig | None = None,
         reset_solver: bool = True,
         solver_regen_interval: int | None = None,
+        noise_std: float | NDArray = 0.0,
     ):
         """
         Initializes the MPC Data Generator.
@@ -107,10 +108,14 @@ class MPCDataGenerator:
             If True, resets the solver states to zero before each simulation.
         solver_regen_interval : int | None
             If not None, regenerates the solver every N iterations to reset internal state.
+        noise_std : float | NDArray
+            Standard deviation of the noise to be added to the system. 
+            Can be a scalar (same noise for all states) or a vector of shape (nx,) for per-state noise levels. Default is 0 (no noise).
         """
         self.solver_adapter = create_solver_adapter(solver)
         self.reset_solver = reset_solver
         self.solver_regen_interval = solver_regen_interval
+        self.noise_std = noise_std
 
         self.mpc_cfg = extract_cfg(resolve_solver(solver))
         self.mpc_cfg.T_sim = T_sim
@@ -260,6 +265,19 @@ class MPCDataGenerator:
             arr[:n_active, :-1, :] = arr[:n_active, 1:, :]
         else:
             arr[:n_active, 0, :] = arr[:n_active, 1, :]
+    
+    def _add_noise(self, arr: NDArray, n_active: int) -> None:
+        if self.noise_std is not None and np.any(self.noise_std > 0):
+            if np.isscalar(self.noise_std):
+                noise = np.random.normal(loc=0.0, scale=float(self.noise_std), size=arr[:n_active].shape)
+            else:
+                noise = np.random.normal(loc=0.0, scale=np.asarray(self.noise_std).reshape(1, 1, -1), size=arr[:n_active].shape)
+            arr[:n_active] += noise
+            arr[:n_active] = np.clip(
+                arr[:n_active], 
+                self.mpc_cfg.constraints.lbx[None, None, :], 
+                self.mpc_cfg.constraints.ubx[None, None, :]
+            )
 
     def generate(self, n_samples: int, only_feasible: bool = False) -> MPCDataset:
         """
@@ -312,6 +330,9 @@ class MPCDataGenerator:
                 # --- State Shift ---
                 self._shift(current_x, n_active)
                 self._shift(current_u, n_active)
+
+                # --- Add Noise ---
+                self._add_noise(current_x[:n_active, 0:1, :], n_active)
 
                 # --- Evaluation ---
                 # Feasibility Check
@@ -390,22 +411,17 @@ class MPCDataGenerator:
 
                 pbar.set_postfix_str(f"feasible: {self.feasibility_percentage:.1f}%")
 
+        __logger__.info("Finalizing dataset...")
         dataset.finalize(recalculate_costs=True, truncate=True)
         return dataset
 
 
-def get_temp_solver(
-    ocp: AcadosOcp,
-    *args,
-    **kwargs,
-) -> AcadosOcpSolver:
-    json_file = f"{ocp.model.name}_ocp.json"
+def add_temp_folder(ocp: AcadosOcp, file_name: str) -> tuple[AcadosOcp, str]:
+    """
+    Creates a temporary directory and instantiates the given acados solver class inside it.
+    """
     temp_dir = tempfile.mkdtemp(prefix=f"acados_{ocp.model.name}_")
     __logger__.info(f"Created temporary directory for solver: {temp_dir}")
     ocp.code_export_directory = os.path.join(temp_dir, "code_export")
-    json_file = os.path.join(temp_dir, f"{ocp.model.name}_ocp.json")
-
-    solver = AcadosOcpSolver(ocp, json_file=json_file, *args, **kwargs)
-    setattr(solver, "_mpc_datagen_temp_dir", temp_dir)
-
-    return solver
+    file_name = os.path.join(temp_dir, f"{ocp.model.name}_ocp.json")
+    return ocp, file_name

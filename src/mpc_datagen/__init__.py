@@ -4,7 +4,7 @@ from .generation import (
     EpsBandConfig,
     UniqueBoundedSampler,
     SamplerBase,
-    get_temp_solver
+    add_temp_folder
 )
 
 # Data structures
@@ -51,5 +51,5 @@ __all__ = [
     "mdg_extractor",
 
     # Helpers
-    "get_temp_solver",
+    "add_temp_folder",
 ]

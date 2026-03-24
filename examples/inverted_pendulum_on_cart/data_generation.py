@@ -78,11 +78,11 @@ def main():
 
     # Cost matrices
     Q = np.diag([1e2, 1e1, 1e2, 1e-2])
-    R = np.diag([1e-2])
+    R = np.diag([1e1])
 
     # Sample in a tighter local region around the equilibrium to improve feasibility
     sample_percentages = np.array([1.0, 1.0, 0.333, 1.0], dtype=float)
-    sample_bias = np.array([0.0, 0.0, np.pi, 0.0], dtype=float)
+    sample_bias = np.array([0.0, 0.0, 0.0, 0.0], dtype=float)
 
     base_path = Path(args.base_path) / datetime.now().strftime('%Y%m%d_%H%M%S')
 
@@ -117,7 +117,8 @@ def main():
         T_sim=T_sim,
         sampler=sampler,
         xeps_cfg=eps_cfg,
-        solver_regen_interval=20,
+        solver_regen_interval=5,
+        noise_std=1e-3,
     )
     dataset = generator.generate(n_samples=n_samples, only_feasible=True)
     dataset = normalize_dataset(dataset)
@@ -133,7 +134,7 @@ def main():
     roa_cert = ROAVerifier(dataset[0].config)
     roa_bounds, c_min = roa_cert.roa_bounds()
 
-    alpha = 1.0  #if veri_stats.details.get("asym_stab_report", None) is None else veri_stats.details["asym_stab_report"].min_alpha
+    alpha = 1.0 if veri_stats.details.get("asym_stab_report", None) is None else veri_stats.details["asym_stab_report"].min_alpha
     mdg_plots.all(
         dataset=dataset[:min(150, n_samples)],
         state_labels=["x", "v", "theta", "theta_dot"],
