@@ -117,7 +117,7 @@ def main():
         T_sim=T_sim,
         sampler=sampler,
         xeps_cfg=eps_cfg,
-        solver_regen_interval=5,
+        solver_regen_interval=20,
         noise_std=1e-3,
     )
     dataset = generator.generate(n_samples=n_samples, only_feasible=True)

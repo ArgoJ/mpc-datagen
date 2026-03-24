@@ -4,7 +4,10 @@ from abc import ABC, abstractmethod
 from numpy.typing import NDArray
 
 from acados_template import AcadosOcpSolver, AcadosOcpBatchSolver
-from pkg_logger import suppress_native_output
+from pkg_logger import suppress_native_output, get_package_logger
+
+__logger__ = get_package_logger(__name__)
+
 
 class SolverAdapter(ABC):
     """
@@ -177,9 +180,17 @@ class AcadosBatchSolverAdapter(SolverAdapter):
             self.solver.ocp_solvers[slot].reset()
 
     def regenerate(self, idxs: NDArray) -> None:
+        ptr_array = getattr(self.solver, "_AcadosOcpBatchSolver__ocp_solvers_pointer", None)
+        
+        if ptr_array is None:
+            __logger__.warning("Construction of AcadosOcpBatchSolverAdapter failed: could not access internal solver pointer array. Regeneration will be skipped.")
+            return
+
         for idx in idxs:
             old_solver = self.solver.ocp_solvers[idx]
-            self.solver.ocp_solvers[idx] = self._regenerate_solver(old_solver)
+            new_solver = self._regenerate_solver(old_solver)
+            self.solver.ocp_solvers[idx] = new_solver
+            ptr_array[idx] = new_solver.capsule
 
     @staticmethod
     def _regenerate_solver(solver: AcadosOcpSolver) -> AcadosOcpSolver:
