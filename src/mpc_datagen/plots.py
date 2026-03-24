@@ -73,6 +73,29 @@ def _plotly_multiline(x: NDArray, axis: int=0):
     elif axis == 1:
         return np.vstack([x, np.full((x.shape[1], 1), np.nan)]).flatten()
 
+def _extract_roa_boundary(
+        x_vec: NDArray, y_vec: NDArray, Z: NDArray, c_level: float
+    ) -> tuple[NDArray, NDArray]:
+    """
+    Extrahiert die (x,y) Koordinaten der V(x)=c Kontur aus einem Grid.
+    Funktioniert als Blackbox für Matrizen und Neuronale Netze.
+    """    
+    from skimage import measure
+    contours = measure.find_contours(Z, c_level)
+    
+    if not contours:
+        # Falls das Level c_level nicht im Z-Grid existiert
+        return np.array([]), np.array([])
+        
+    main_contour = max(contours, key=len)
+    y_idx = main_contour[:, 0]
+    x_idx = main_contour[:, 1]
+    
+    x_points = np.interp(x_idx, np.arange(len(x_vec)), x_vec)
+    y_points = np.interp(y_idx, np.arange(len(y_vec)), y_vec)
+    
+    return x_points, y_points
+
 
 def mpc_trajectories(
     dataset: MPCDataset,
@@ -915,7 +938,6 @@ def roa(
     limits: list[tuple[float, float]] | None = None,
     resolution: int = 100,
     plot_3d: bool = False,
-    show_level_plane: bool = False,
     html_path: str | None = None
 ) -> go.Figure | None:
     
@@ -970,40 +992,21 @@ def roa(
         ))
 
     # --- ROA Boundary (Scatter/Line) ---
-    b_x = bounds[:, idx_x]
-    b_y = bounds[:, idx_y]
-    # For 3D, compute V(x) for the boundary points to keep scaling consistent.
-    full_bounds = np.zeros((bounds.shape[0], dim_x))
-    full_bounds[:, idx_x] = b_x
-    full_bounds[:, idx_y] = b_y
-    b_z = np.asarray(lyapunov_func(full_bounds), dtype=float).reshape(-1)
-
-    order = _order_boundary_points_xy(b_x, b_y)
-    b_x = np.asarray(b_x, dtype=float).reshape(-1)[order]
-    b_y = np.asarray(b_y, dtype=float).reshape(-1)[order]
-    b_z = np.asarray(b_z, dtype=float).reshape(-1)[order]
+    b_x, b_y = _extract_roa_boundary(x_vec, y_vec, Z, c_level)
 
     # Close the loop
     if b_x.size > 0:
         b_x = np.concatenate([b_x, b_x[:1]])
         b_y = np.concatenate([b_y, b_y[:1]])
-        b_z = np.concatenate([b_z, b_z[:1]])
 
     if plot_3d:
+        b_z = np.full_like(b_x, c_level)
         fig.add_trace(go.Scatter3d(
             x=b_x, y=b_y, z=b_z,
             mode='lines',
             line=dict(color='red', width=4),
-            name=f'ROA Boundary (c={c_level:.2f})'
+            name=f'$\\text{{ROA Boundary (c={c_level:.2f})}}$'
         ))
-
-        if show_level_plane:
-            z_plane = np.full_like(Z, c_level)
-            fig.add_trace(go.Surface(
-                z=z_plane, x=x_vec, y=y_vec,
-                colorscale=[[0, 'rgba(255,0,0,0.2)'], [1, 'rgba(255,0,0,0.2)']],
-                showscale=False, name='Safety Level', showlegend=False
-            ))
     else:
         fig.add_trace(go.Scatter(
             x=b_x, y=b_y,
@@ -1011,8 +1014,9 @@ def roa(
             line=dict(color='red', width=3, dash='dash'),
             fill='toself',
             fillcolor='rgba(255,0,0,0.1)',
-            name=f'ROA Boundary (c={c_level:.2f})'
+            name=f'$\\text{{ROA Boundary (c={c_level:.2f})}}$'
         ))
+
     # --- Layout ---
     layout_args = dict(
         title=f"Stability Verification: ROA for c={c_level:.2f}" if plot_3d else r"$\text{Stability Verification: ROA for } c = " + f"{c_level:.2f}$",
@@ -1073,7 +1077,6 @@ def all(
     # roa specific
     roa_lyapunov_func: Callable[[NDArray], NDArray] = None,
     c_level: float = None,
-    show_level_plane: bool = False,
     roa_bounds: NDArray = None,
 ) -> None:
     """Convenience function to plot trajectories, residuals, Lyapunov, and ROA together."""
@@ -1125,6 +1128,5 @@ def all(
         limits=limits,
         resolution=resolution,
         plot_3d=plot_3d,
-        show_level_plane=show_level_plane,
         html_path=roa_path
     )

@@ -78,7 +78,7 @@ def main():
 
     # Cost matrices
     Q = np.diag([1e2, 1e1, 1e2, 1e-2])
-    R = np.diag([1e1])
+    R = np.diag([5e-1])
 
     # Sample in a tighter local region around the equilibrium to improve feasibility
     sample_percentages = np.array([1.0, 1.0, 0.333, 1.0], dtype=float)
@@ -118,10 +118,10 @@ def main():
         sampler=sampler,
         xeps_cfg=eps_cfg,
         solver_regen_interval=20,
-        noise_std=1e-3,
+        # noise_std=1e-3,
     )
     dataset = generator.generate(n_samples=n_samples, only_feasible=True)
-    dataset = normalize_dataset(dataset)
+    # dataset = normalize_dataset(dataset)
     dataset.validate(tol_stability=0.1)
     dataset.save(f"{base_path}/inverted_pendulum_on_cart_N{N}_data.hdf5")
 

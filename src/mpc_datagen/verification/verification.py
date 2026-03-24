@@ -140,45 +140,9 @@ class StabilityVerifier:
         scalar_input = (x.ndim == 1)
         if scalar_input:
             x = x.reshape(1, -1)
-            
-        # x is (N, nx)
-        # Cost: 0.5 * || Vx*x + Vu*u - yref ||_W^2
-        # Gradient w.r.t u: Vu.T @ W @ (Vx*x + Vu*u - yref)
-        # set to 0 => Vu.T @ W @ Vu @ u = - Vu.T @ W @ (Vx*x - yref)
-        # H u = - g
-        
-        Vx = self.cfg.cost.Vx
-        Vu = self.cfg.cost.Vu
-        W = self.cfg.cost.W
-        yref = self.cfg.cost.yref
-        
-        # H: (nu, nu)
-        H = Vu.T @ W @ Vu
-        H = 0.5 * (H + H.T)
 
-        # Vx*x - yref: (N, ny)
-        term1 = x @ Vx.T - yref
-        
-        # g (rhs for each sample): term1 @ W @ Vu -> (N, nu)
-        G = term1 @ W @ Vu
-        
-        # H @ u_star.T = -G.T  => u_star.T = -H^-1 @ G.T
-        if H.size == 0 or H.shape[0] == 0:
-            # No control inputs, u is empty.
-            u_star = np.zeros((x.shape[0], 0))
-        else:
-            try:
-                # Solve H X = -G.T  where X is u_star.T (nu, N)
-                # result is (nu, N)
-                u_star_T = -np.linalg.solve(H, G.T)
-                u_star = u_star_T.T
-            except np.linalg.LinAlgError:
-                # Fallback for singular H
-                u_star_T = -np.linalg.lstsq(H, G.T, rcond=None)[0]
-                u_star = u_star_T.T
-        
         # Calculate costs: (N,)
-        costs = self.cfg.cost.get_stage_cost(x, u_star)
+        costs, u_star = self.cfg.cost.get_optimal_stage_cost(x)
         
         # Input bounds
         valid_u = np.full(x.shape[0], True)
@@ -258,7 +222,7 @@ class StabilityVerifier:
         
         with  __logger__.tqdm(
             self,
-            desc="Checking Lyapunov descent",
+            desc="Lyapunov descent check",
             unit="trajectory",
         ) as pbar:
             for _ in pbar:
@@ -273,6 +237,7 @@ class StabilityVerifier:
                 if n_violations > 0:
                     violation_count += n_violations
                     max_increase = max(max_increase, float(np.max(diffs[violation_mask])))
+                    pbar.set_postfix_str(f"viol.: {violation_count}")
         
         is_stable = (violation_count == 0)
 
@@ -369,32 +334,32 @@ class StabilityVerifier:
         report : AsymptoticStabilityReport
             A report indicating the empirical alpha and whether the decrease condition is satisfied.
         """
-        alphas = []
-        violations = []
         used = 0
-
+        min_alpha = float("inf")
+        max_violation = 0.0
 
         with __logger__.tqdm(
             self,
-            desc="Checking asymptotic stability (alpha-decay)",
+            desc="Asymptotic stability check",
             unit="trajectory",
         ) as pbar:
             for _ in pbar:
                 stats = self.alpha_and_max_violation(alpha_required=alpha_required)
                 if stats.n_used == 0:
                     continue
-                if np.isfinite(stats.min_alpha):
-                    alphas.append(float(stats.min_alpha))
-                violations.append(float(stats.max_violation))
+
                 used += 1
+                if np.isfinite(stats.min_alpha) and stats.min_alpha < min_alpha:
+                    min_alpha = float(stats.min_alpha)
+                    pbar.set_postfix_str(f"α: {min_alpha:.3f}")
+                if np.isfinite(stats.max_violation) and stats.max_violation > max_violation:
+                    max_violation = float(stats.max_violation)
+
 
         if used == 0:
             min_alpha = 0.0
             max_violation = float("inf")
             empirical_ok = False
-        else:
-            min_alpha = float(np.min(alphas)) if alphas else 0.0
-            max_violation = float(np.max(violations))
 
         empirical_ok = bool((min_alpha >= alpha_required) and (max_violation <= 0.0))
 
@@ -462,7 +427,7 @@ class StabilityVerifier:
                 message="NOT APPLICABLE: Dataset includes terminal cost/bounds; no-terminal theorem does not directly apply")
 
         N = int(cfg0.N)
-        gamma_values: list[float] = []
+        max_gamma = 0.0
 
         with __logger__.tqdm(
             self,
@@ -470,26 +435,23 @@ class StabilityVerifier:
             unit="trajectory",
         ) as pbar:
             for _ in pbar:
-                gamma_values.extend(self.gamma_estimates())
+                gamma = float(np.max(self.gamma_estimates()))
+                if gamma > max_gamma:
+                    max_gamma = gamma
+                    pbar.set_postfix_str(f"γ: {max_gamma:.3f}")
 
-        if not gamma_values:
-            return GrüneHorizonReport(
-                applicability=False,
-                message="NOT APPLICABLE: insufficient data")
-        
-        gamma = float(np.max(gamma_values))
-        N_required, alpha_N = grune_required_horizon_and_alpha(gamma=gamma, N=N)
+        N_required, alpha_N = grune_required_horizon_and_alpha(gamma=max_gamma, N=N)
         stable_flag = bool((N >= N_required) and (alpha_N > 0.0))
 
         return GrüneHorizonReport(
             applicability=True,
-            gamma_estimate=gamma,
+            gamma_estimate=max_gamma,
             alpha_N_estimate=alpha_N,
             required_horizon=N_required,
             is_stable=stable_flag,
             message=(
                 f"{'PASS' if stable_flag else 'FAIL'}: "
-                f"gamma={gamma:.4e}, "
+                f"gamma={max_gamma:.4e}, "
                 f"alpha_N={alpha_N:.4e}, "
                 f"required_horizon={N_required}<={N}."
             ))

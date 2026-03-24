@@ -3,12 +3,14 @@ import h5py
 import os
 import numpy as np
 import pandas as pd
+import casadi as ca
 
 from numpy.typing import NDArray
 from dataclasses import dataclass, field, asdict
-from collections.abc import Iterator, Iterable
+from collections.abc import Iterator, Iterable, Callable
 from typing import Any, Generic, Protocol, TypeVar, cast, overload
 from pathlib import Path
+
 
 from .linalg import weighted_quadratic_norm
 from pkg_logger import get_package_logger
@@ -447,6 +449,51 @@ class LinearLSCost:
     def has_terminal_cost(self) -> bool:
         """Check if terminal cost matrices are defined."""
         return _is_defined_array(self.Vx_e, not_zero=True) and _is_defined_array(self.W_e, not_zero=True)
+    
+    def get_optimal_stage_cost(self, x: NDArray) -> tuple[float | NDArray, NDArray]:
+        r"""Lower bound on $\ell^*(x) := \min_\mathbf{u} \ell(x,\mathbf{u})$ via unconstrained minimization.
+        Derives analytical minimum based on the linear residuals. Supports vectorized inputs.
+        """
+        # x is (N, nx)
+        # Cost: 0.5 * || Vx*x + Vu*u - yref ||_W^2
+        # Gradient w.r.t u: Vu.T @ W @ (Vx*x + Vu*u - yref)
+        # set to 0 => Vu.T @ W @ Vu @ u = - Vu.T @ W @ (Vx*x - yref)
+        # H u = - g
+
+        x = np.asarray(x, dtype=float)
+        scalar_input = (x.ndim == 1)
+        if scalar_input:
+            x = x.reshape(1, -1)
+            
+        N_samples = x.shape[0]
+
+        # H u = -G  ==> u* = -H^-1 G
+        # H: (nu, nu)
+        H = self.Vu.T @ self.W @ self.Vu
+        H = 0.5 * (H + H.T)
+
+        # Vx*x - yref: (N, ny)
+        term1 = x @ self.Vx.T - self.yref
+
+        # G: (N, nu)
+        G = term1 @ self.W @ self.Vu
+        
+        # H @ u_star.T = -G.T  => u_star.T = -H^-1 @ G.T
+        if H.size == 0 or H.shape[0] == 0:
+            u_star = np.zeros((N_samples, 0))
+        else:
+            try:
+                u_star_T = -np.linalg.solve(H, G.T)
+                u_star = u_star_T.T
+            except np.linalg.LinAlgError:
+                u_star_T = -np.linalg.lstsq(H, G.T, rcond=None)[0]
+                u_star = u_star_T.T
+        
+        costs = self.get_stage_cost(x, u_star)
+        
+        if scalar_input:
+            return float(costs[0]) if isinstance(costs, np.ndarray) else float(costs)
+        return costs, u_star
 
     @classmethod
     def from_hdf5(cls, grp: h5py.Group, overwrite_grp: h5py.Group | None = None) -> "LinearLSCost":
@@ -472,20 +519,13 @@ class LinearLSCost:
 
         overwrite_cost_grp = overwrite_grp.get("cost", None)
         if overwrite_cost_grp is not None:
-            if "Vx" in overwrite_cost_grp:
-                cost.Vx = overwrite_cost_grp["Vx"][:]
-            if "Vu" in overwrite_cost_grp:
-                cost.Vu = overwrite_cost_grp["Vu"][:]
-            if "W" in overwrite_cost_grp:
-                cost.W = overwrite_cost_grp["W"][:]
-            if "yref" in overwrite_cost_grp:
-                cost.yref = overwrite_cost_grp["yref"][:]
-            if "Vx_e" in overwrite_cost_grp:
-                cost.Vx_e = overwrite_cost_grp["Vx_e"][:]
-            if "W_e" in overwrite_cost_grp:
-                cost.W_e = overwrite_cost_grp["W_e"][:]
-            if "yref_e" in overwrite_cost_grp:
-                cost.yref_e = overwrite_cost_grp["yref_e"][:]
+            if "Vx" in overwrite_cost_grp: cost.Vx = overwrite_cost_grp["Vx"][:]
+            if "Vu" in overwrite_cost_grp: cost.Vu = overwrite_cost_grp["Vu"][:]
+            if "W" in overwrite_cost_grp: cost.W = overwrite_cost_grp["W"][:]
+            if "yref" in overwrite_cost_grp: cost.yref = overwrite_cost_grp["yref"][:]
+            if "Vx_e" in overwrite_cost_grp: cost.Vx_e = overwrite_cost_grp["Vx_e"][:]
+            if "W_e" in overwrite_cost_grp: cost.W_e = overwrite_cost_grp["W_e"][:]
+            if "yref_e" in overwrite_cost_grp: cost.yref_e = overwrite_cost_grp["yref_e"][:]
             if "stage_scale" in overwrite_cost_grp.attrs:
                 cost.stage_scale = float(overwrite_cost_grp.attrs["stage_scale"])
             if "terminal_scale" in overwrite_cost_grp.attrs:
@@ -499,24 +539,204 @@ class LinearLSCost:
         if all(name in exclude_fields for name in field_names):
             return
         cost_grp = grp.create_group("cost")
-        if "Vx" not in exclude_fields:
-            cost_grp.create_dataset("Vx", data=self.Vx, compression="gzip")
-        if "Vu" not in exclude_fields:
-            cost_grp.create_dataset("Vu", data=self.Vu, compression="gzip")
-        if "W" not in exclude_fields:
-            cost_grp.create_dataset("W", data=self.W, compression="gzip")
-        if "yref" not in exclude_fields:
-            cost_grp.create_dataset("yref", data=self.yref, compression="gzip")
-        if "Vx_e" not in exclude_fields:
-            cost_grp.create_dataset("Vx_e", data=self.Vx_e, compression="gzip")
-        if "W_e" not in exclude_fields:
-            cost_grp.create_dataset("W_e", data=self.W_e, compression="gzip")
-        if "yref_e" not in exclude_fields:
-            cost_grp.create_dataset("yref_e", data=self.yref_e, compression="gzip")
-        if "stage_scale" not in exclude_fields:
-            cost_grp.attrs["stage_scale"] = float(self.stage_scale)
-        if "terminal_scale" not in exclude_fields:
-            cost_grp.attrs["terminal_scale"] = float(self.terminal_scale)
+        if "Vx" not in exclude_fields: cost_grp.create_dataset("Vx", data=self.Vx, compression="gzip")
+        if "Vu" not in exclude_fields: cost_grp.create_dataset("Vu", data=self.Vu, compression="gzip")
+        if "W" not in exclude_fields: cost_grp.create_dataset("W", data=self.W, compression="gzip")
+        if "yref" not in exclude_fields: cost_grp.create_dataset("yref", data=self.yref, compression="gzip")
+        if "Vx_e" not in exclude_fields: cost_grp.create_dataset("Vx_e", data=self.Vx_e, compression="gzip")
+        if "W_e" not in exclude_fields: cost_grp.create_dataset("W_e", data=self.W_e, compression="gzip")
+        if "yref_e" not in exclude_fields: cost_grp.create_dataset("yref_e", data=self.yref_e, compression="gzip")
+        if "stage_scale" not in exclude_fields: cost_grp.attrs["stage_scale"] = float(self.stage_scale)
+        if "terminal_scale" not in exclude_fields: cost_grp.attrs["terminal_scale"] = float(self.terminal_scale)
+
+@dataclass
+class NonlinearLSCost:
+    r"""This class defines the objective function terms for the Optimal Control Problem (OCP)
+    using a nonlinear least-squares formulation.
+
+    Stage Cost:
+        l(x, u) = s * 0.5 * || y_fun(x, u) - yref ||_W^2
+    
+    Terminal Cost:
+        l_e(x)  = s_e * 0.5 * || y_e_fun(x) - yref_e ||_W_e^2
+
+    Attributes
+    ----------
+    W : NDArray
+        Weighting matrix for the stage cost. Shape: (ny, ny).
+    yref : NDArray
+        Reference signal for the stage outputs. Shape: (ny,).
+    W_e : NDArray
+        Weighting matrix for the terminal cost. Shape: (ny_e, ny_e).
+    yref_e : NDArray
+        Reference signal for the terminal outputs. Shape: (ny_e,).
+    stage_scale : float
+        Scaling factor applied to the stage cost term (default: 1.0).
+    terminal_scale : float
+        Scaling factor applied to the terminal cost term (default: 1.0).
+    y_fun : Callable
+        Function to compute the nonlinear residual y given (x, u). Not serialized to HDF5.
+    y_e_fun : Callable
+        Function to compute the nonlinear terminal residual y_e given (x). Not serialized to HDF5.
+    u_star_fun : Callable
+        Function to return analytical optimal control input u* given (x). If None, l_star assumes u=0.
+    """
+    W: np.ndarray = field(default_factory=lambda: np.array([[]]))
+    yref: np.ndarray = field(default_factory=lambda: np.array([[]]))
+    W_e: np.ndarray = field(default_factory=lambda: np.array([[]]))
+    yref_e: np.ndarray = field(default_factory=lambda: np.array([[]]))
+    stage_scale: float = 1.0
+    terminal_scale: float = 1.0
+    
+    # Callable functions (excluded from standard dictionary/HDF5 mappings)
+    y_fun: Callable[[np.ndarray, np.ndarray], np.ndarray] | ca.Function | None = field(default=None, repr=False)
+    y_e_fun: Callable[[np.ndarray], np.ndarray] | ca.Function | None = field(default=None, repr=False)
+    u_star_fun: Callable[[np.ndarray], np.ndarray] | ca.Function | None = field(default=None, repr=False)
+
+    def get_y(self, x: np.ndarray, u: np.ndarray) -> np.ndarray:
+        """Compute the nonlinear stage output y."""
+        if self.y_fun is None:
+            raise NotImplementedError("y_fun must be defined on NonlinearLSCost to compute residuals.")
+        res = self.y_fun(x, u)
+        return res.full().squeeze() if hasattr(res, "full") else np.asarray(res)
+
+    def get_y_e(self, x: np.ndarray) -> np.ndarray:
+        """Compute the nonlinear terminal stage output y_e."""
+        if self.y_e_fun is None:
+            raise NotImplementedError("y_e_fun must be defined on NonlinearLSCost to compute terminal residuals.")
+        res = self.y_e_fun(x)
+        return res.full().squeeze() if hasattr(res, "full") else np.asarray(res)
+
+    def get_stage_cost(self, x: np.ndarray, u: np.ndarray, use_scaled: bool = False) -> float | np.ndarray:
+        """Compute the cost for a given nonlinear output vector y."""
+        y = self.get_y(x, u)
+        e = y - self.yref
+        
+        scale = 0.5
+        if use_scaled:
+            scale *= self.stage_scale
+        
+        norm = weighted_quadratic_norm(e, self.W)
+        if np.ndim(norm) == 0:
+            return scale * float(norm)
+        return scale * norm
+    
+    def get_terminal_cost(self, x: np.ndarray, use_scaled: bool = False) -> float | np.ndarray:
+        """Compute the nonlinear terminal cost."""
+        if not self.has_terminal_cost():
+            return 0.0
+        y = self.get_y_e(x)
+        e = y - self.yref_e
+        
+        scale = 0.5
+        if use_scaled:
+            scale *= self.terminal_scale
+
+        norm = weighted_quadratic_norm(e, self.W_e)
+        if np.ndim(norm) == 0:
+            return scale * float(norm)
+        return scale * norm
+
+    def has_terminal_cost(self) -> bool:
+        """Check if terminal cost matrices are defined."""
+        return _is_defined_array(self.W_e, not_zero=True)
+
+    def l_star(self, x: np.ndarray, nu: int = 1) -> float | np.ndarray:
+        r"""Lower bound on $\ell^*(x) := \min_\mathbf{u} \ell(x,\mathbf{u})$.
+        For generic nonlinear functions, this requires a provided `u_star_fun(x)`. 
+        If not provided, it assumes $u^* = 0$ (which is valid for standard decoupled control penalties).
+        """
+        x = np.asarray(x, dtype=float)
+        scalar_input = (x.ndim == 1)
+        if scalar_input:
+            x = x.reshape(1, -1)
+            
+        N_samples = x.shape[0]
+        
+        if self.u_star_fun is not None:
+            u_star = self.u_star_fun(x)
+        else:
+            # Fallback assumption: The optimal unconstrained control is 0 (typical for decoupled LQR penalization)
+            u_star = np.zeros((N_samples, nu))
+
+        costs = self.get_stage_cost(x, u_star)
+        
+        if scalar_input:
+            return float(costs[0]) if isinstance(costs, np.ndarray) else float(costs)
+        return costs
+
+    @classmethod
+    def from_hdf5(cls, grp: h5py.Group, overwrite_grp: h5py.Group | None = None) -> "NonlinearLSCost":
+        """Load cost matrices from a trajectory group (expects a `cost` subgroup)."""
+        cost_grp = grp.get("cost", None)
+        if cost_grp is None:
+            return cls()
+
+        cost = cls(
+            W=cost_grp["W"][:] if "W" in cost_grp else np.array([]),
+            yref=cost_grp["yref"][:] if "yref" in cost_grp else np.array([]),
+            W_e=cost_grp["W_e"][:] if "W_e" in cost_grp else np.array([]),
+            yref_e=cost_grp["yref_e"][:] if "yref_e" in cost_grp else np.array([]),
+            stage_scale=cost_grp.attrs.get("stage_scale", 1.0),
+            terminal_scale=cost_grp.attrs.get("terminal_scale", 1.0),
+        )
+        
+        try:
+            if "y_fun_casadi" in cost_grp:
+                cost.y_fun = ca.Function.deserialize(cost_grp["y_fun_casadi"][()].decode('utf-8'))
+            if "y_e_fun_casadi" in cost_grp:
+                cost.y_e_fun = ca.Function.deserialize(cost_grp["y_e_fun_casadi"][()].decode('utf-8'))
+            if "u_star_fun_casadi" in cost_grp:
+                cost.u_star_fun = ca.Function.deserialize(cost_grp["u_star_fun_casadi"][()].decode('utf-8'))
+        except Exception as e:
+            __logger__.warning("Something went wrong loading CasADi functions for NonlinearLSCost. Error: %s", e)
+        
+        if overwrite_grp is None:
+            return cost
+
+        overwrite_cost_grp = overwrite_grp.get("cost", None)
+        if overwrite_cost_grp is not None:
+            if "W" in overwrite_cost_grp: cost.W = overwrite_cost_grp["W"][:]
+            if "yref" in overwrite_cost_grp: cost.yref = overwrite_cost_grp["yref"][:]
+            if "W_e" in overwrite_cost_grp: cost.W_e = overwrite_cost_grp["W_e"][:]
+            if "yref_e" in overwrite_cost_grp: cost.yref_e = overwrite_cost_grp["yref_e"][:]
+            if "stage_scale" in overwrite_cost_grp.attrs:
+                cost.stage_scale = float(overwrite_cost_grp.attrs["stage_scale"])
+            if "terminal_scale" in overwrite_cost_grp.attrs:
+                cost.terminal_scale = float(overwrite_cost_grp.attrs["terminal_scale"])
+        return cost
+
+    def to_hdf5(self, grp: h5py.Group, exclude_fields: set | None = None) -> None:
+        """Save cost matrices to a trajectory group (creates a `cost` subgroup)."""
+        exclude_fields = exclude_fields or set()
+        
+        # We explicitly exclude Callable properties from being saved
+        not_serializable = {"y_fun", "y_e_fun", "u_star_fun"}
+        field_names = [f for f in self.__dataclass_fields__.keys() if f not in not_serializable]
+        
+        if all(name in exclude_fields for name in field_names):
+            return
+            
+        cost_grp = grp.create_group("cost")
+        
+        cost_grp.attrs["cost_type"] = "NONLINEAR_LS"
+
+        if "W" not in exclude_fields: cost_grp.create_dataset("W", data=self.W, compression="gzip")
+        if "yref" not in exclude_fields: cost_grp.create_dataset("yref", data=self.yref, compression="gzip")
+        if "W_e" not in exclude_fields: cost_grp.create_dataset("W_e", data=self.W_e, compression="gzip")
+        if "yref_e" not in exclude_fields: cost_grp.create_dataset("yref_e", data=self.yref_e, compression="gzip")
+        if "stage_scale" not in exclude_fields: cost_grp.attrs["stage_scale"] = float(self.stage_scale)
+        if "terminal_scale" not in exclude_fields: cost_grp.attrs["terminal_scale"] = float(self.terminal_scale)
+
+        try:
+            if "y_fun" not in exclude_fields and isinstance(self.y_fun, ca.Function):
+                cost_grp.create_dataset("y_fun_casadi", data=self.y_fun.serialize().encode('utf-8'))
+            if "y_e_fun" not in exclude_fields and isinstance(self.y_e_fun, ca.Function):
+                cost_grp.create_dataset("y_e_fun_casadi", data=self.y_e_fun.serialize().encode('utf-8'))
+            if "u_star_fun" not in exclude_fields and isinstance(self.u_star_fun, ca.Function):
+                cost_grp.create_dataset("u_star_fun_casadi", data=self.u_star_fun.serialize().encode('utf-8'))
+        except Exception as e:
+            __logger__.warning("Something went wrong serializing CasADi functions for NonlinearLSCost. Error: %s", e)
 
 @dataclass
 class Constraints:
