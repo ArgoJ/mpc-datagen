@@ -118,7 +118,7 @@ def main():
         sampler=sampler,
         xeps_cfg=eps_cfg,
         solver_regen_interval=20,
-        # noise_std=1e-3,
+        # noise_std=1e-4,
     )
     dataset = generator.generate(n_samples=n_samples, only_feasible=True)
     # dataset = normalize_dataset(dataset)

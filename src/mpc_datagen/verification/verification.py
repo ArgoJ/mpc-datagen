@@ -237,7 +237,7 @@ class StabilityVerifier:
                 if n_violations > 0:
                     violation_count += n_violations
                     max_increase = max(max_increase, float(np.max(diffs[violation_mask])))
-                    pbar.set_postfix_str(f"viol.: {violation_count}")
+                    pbar.set_postfix_str(f"n_viol.: {violation_count}")
         
         is_stable = (violation_count == 0)
 
