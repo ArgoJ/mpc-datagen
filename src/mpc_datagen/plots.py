@@ -1,5 +1,6 @@
 import numpy as np
 import os
+import re
 import plotly.graph_objects as go
 
 from numpy.typing import NDArray
@@ -57,6 +58,51 @@ def _slug(label: str) -> str:
     while "__" in cleaned:
         cleaned = cleaned.replace("__", "_")
     return cleaned.strip("_") or "state"
+
+
+def _to_latex(label: str) -> str:
+    """Convert mixed text/math input to a LaTeX-safe math-body fragment.
+
+    Examples
+    --------
+    Input: ``sometext $var1$ vs $var2$``
+    Output fragment: ``$\text{sometext } var1 \text{ vs } var2$``
+    """
+    default = r"$\text{}$"
+    s = str(label).strip()
+    if not s:
+        return default
+
+    parts: list[str] = []
+    chunks = re.split(r"(\$[^$]*\$)", s)
+
+    for chunk in chunks:
+        if not chunk:
+            continue
+
+        if len(chunk) >= 2 and chunk.startswith("$") and chunk.endswith("$"):
+            math_expr = chunk[1:-1].strip()
+            if math_expr:
+                parts.append(math_expr)
+        else:
+            escaped = (
+                chunk
+                .replace("\\", r"\\")
+                .replace("{", r"\{")
+                .replace("}", r"\}")
+            )
+            if escaped:
+                parts.append(rf"\text{{{escaped}}}")
+
+    if not parts:
+        return default
+    
+    raw = " ".join(parts)
+    if not raw.startswith("$"):
+        raw = "$" + raw
+    if not raw.endswith("$"):
+        raw = raw + "$"
+    return raw
 
 
 def _resolve_bounds(bounds: NDArray) -> NDArray:
@@ -137,23 +183,6 @@ def _infer_pair_limits(
         (y_min - pad_y, y_max + pad_y),
     ]
 
-def _order_boundary_points_xy(x: NDArray, y: NDArray) -> NDArray:
-    """Order 2D boundary points by polar angle around centroid.
-
-    This is useful when `bounds` is an unordered point cloud on a closed curve.
-    """
-    x = np.asarray(x, dtype=float).reshape(-1)
-    y = np.asarray(y, dtype=float).reshape(-1)
-    if x.size != y.size:
-        raise ValueError("x and y must have the same number of points")
-    if x.size == 0:
-        return np.array([], dtype=int)
-
-    cx = float(np.mean(x))
-    cy = float(np.mean(y))
-    angles = np.arctan2(y - cy, x - cx)
-    return np.argsort(angles)
-
 def _plotly_multiline(x: NDArray, axis: int=0):
     if axis == 0:
         return np.hstack([x, np.full((x.shape[0], 1), np.nan)]).flatten()
@@ -219,8 +248,7 @@ def _add_lyapunov_landscape(
     y_vec: NDArray,
     *,
     plot_3d: bool,
-    surface_name: str,
-    contour_name: str,
+    name: str,
 ) -> None:
     """Add Lyapunov landscape to a figure."""
     if plot_3d:
@@ -230,9 +258,10 @@ def _add_lyapunov_landscape(
                 x=x_vec,
                 y=y_vec,
                 colorscale='Viridis',
-                name=surface_name,
+                name=_to_latex(name),
                 opacity=0.8,
                 showscale=True,
+                showlegend=False,
             )
         )
     else:
@@ -242,8 +271,9 @@ def _add_lyapunov_landscape(
                 x=x_vec,
                 y=y_vec,
                 colorscale='Viridis',
-                name=contour_name,
+                name=_to_latex(name),
                 showscale=True,
+                showlegend=False,
                 contours=dict(coloring='heatmap', showlabels=True),
             )
         )
@@ -286,7 +316,7 @@ def _add_trajectory_traces(
                     y=y,
                     z=v_traj,
                     mode='lines',
-                    name=f'Run {idx+1}',
+                    name=_to_latex(f'Run ${idx+1}$'),
                     line=dict(color=color, width=4),
                     showlegend=False,
                 )
@@ -297,7 +327,7 @@ def _add_trajectory_traces(
                     x=x,
                     y=y,
                     mode='lines',
-                    name=f'Run {idx+1}',
+                    name=_to_latex(f'Run ${idx+1}$'),
                     line=dict(color=color, width=2),
                     opacity=0.7,
                     showlegend=False,
@@ -332,7 +362,8 @@ def _add_roa_boundary_trace(
                 z=b_z,
                 mode='lines',
                 line=dict(color='red', width=4),
-                name=f'$\\text{{ROA Boundary (c={c_level:.2f})}}$',
+                name=_to_latex(f'ROA'),
+                showlegend=False,
             )
         )
     else:
@@ -344,7 +375,8 @@ def _add_roa_boundary_trace(
                 line=dict(color='red', width=3, dash='dash'),
                 fill='toself',
                 fillcolor='rgba(255,0,0,0.1)',
-                name=f'$\\text{{ROA Boundary (c={c_level:.2f})}}$',
+                name=_to_latex(f'ROA'),
+                showlegend=False,
             )
         )
 
@@ -357,16 +389,16 @@ def _apply_pair_layout(
     pair_limits: list[tuple[float, float]],
     title_2d: str,
     title_3d: str,
-    zaxis_title: str = "V(x)",
+    zaxis_title: str = "$V(x)$",
 ) -> None:
     """Apply standard 2D/3D layout for a state-pair figure."""
     if plot_3d:
         fig.update_layout(
-            title_text=title_3d,
+            title_text=_to_latex(title_3d),
             scene=dict(
-                xaxis_title=pair_labels[0],
-                yaxis_title=pair_labels[1],
-                zaxis_title=zaxis_title,
+                xaxis_title=_to_latex(pair_labels[0]),
+                yaxis_title=_to_latex(pair_labels[1]),
+                zaxis_title=_to_latex(zaxis_title),
             ),
             width=1000,
             height=800,
@@ -376,13 +408,13 @@ def _apply_pair_layout(
         )
     else:
         fig.update_layout(
-            title_text=title_2d,
+            title_text=_to_latex(title_2d),
             xaxis=dict(
-                title=pair_labels[0],
+                title=_to_latex(pair_labels[0]),
                 range=[pair_limits[0][0], pair_limits[0][1]],
             ),
             yaxis=dict(
-                title=pair_labels[1],
+                title=_to_latex(pair_labels[1]),
                 range=[pair_limits[1][0], pair_limits[1][1]],
             ),
             legend=dict(x=1.05, y=1),
@@ -442,7 +474,7 @@ def _save_pair_figures(
     for (idx_x, idx_y), fig in figs.items():
         file_path = f"{root}_{_slug(labels_full[idx_x])}_vs_{_slug(labels_full[idx_y])}{suffix}"
         fig.write_html(file_path, include_mathjax='cdn')
-        __logger__.info(f"{kind} plot saved to {file_path}.")
+    __logger__.info(f"{len(figs)} {kind} plots saved to {root}.")
 
 
 def _add_summary_band(
@@ -528,9 +560,9 @@ def _apply_timeseries_layout(
 ) -> None:
     """Apply common layout for time-series style plots."""
     fig.update_layout(
-        title_text=title_text,
-        xaxis_title=xaxis_title,
-        yaxis_title=yaxis_title,
+        title_text=_to_latex(title_text),
+        xaxis_title=_to_latex(xaxis_title),
+        yaxis_title=_to_latex(yaxis_title),
         hovermode="x unified",
         margin=dict(t=margin_top),
     )
@@ -575,9 +607,14 @@ def mpc_trajectories(
         rows=num_states + num_controls, 
         cols=1, 
         shared_xaxes=True,
-        subplot_titles=(state_labels + control_labels),
         vertical_spacing=0.05
     )
+
+    for i, label in enumerate(state_labels):
+        fig.update_yaxes(title_text=_to_latex(label), row=i + 1, col=1)
+    for i, label in enumerate(control_labels):
+        fig.update_yaxes(title_text=_to_latex(label), row=num_states + i + 1, col=1)
+    fig.update_xaxes(title_text=_to_latex("$t$"), row=num_states + num_controls, col=1)
 
     prediction_indices = []
 
@@ -594,9 +631,9 @@ def mpc_trajectories(
                     x=traj.times, 
                     y=traj.states[:, i],
                     mode='lines',
-                    name=f'Run {idx+1} - {state_labels[i]}',
+                    name=_to_latex(f'Run ${idx+1}$'),
                     line=dict(color=color),
-                    legendgroup=f'Run {idx+1}',
+                    legendgroup=_to_latex(f'Run ${idx+1}$'),
                     showlegend=(i == 0)
                 ),
                 row=row, col=1
@@ -652,8 +689,8 @@ def mpc_trajectories(
                     y=traj.inputs[:, i],
                     mode='lines',
                     line=dict(color=color, shape='hv'), # 'hv' for step-after behavior
-                    name=f'Run {idx+1} - {control_labels[i]}',
-                    legendgroup=f'Run {idx+1}',
+                    name=_to_latex(f'Run ${idx+1}$ - {control_labels[i]}'),
+                    legendgroup=_to_latex(f'Run ${idx+1}$'),
                     showlegend=False
                 ),
                 row=row, col=1
@@ -686,7 +723,7 @@ def mpc_trajectories(
                         line=dict(color=color, width=1, shape='hv'),
                         opacity=0.3,
                         showlegend=False,
-                        legendgroup=f'Run {idx+1}',
+                        legendgroup=_to_latex(f'Run ${idx+1}$'),
                         hoverinfo='skip'
                     ),
                     row=row, col=1
@@ -695,7 +732,7 @@ def mpc_trajectories(
 
     fig.update_layout(
         height=300 * (num_states + num_controls), 
-        title_text="MPC Trajectories",
+        title_text=_to_latex("MPC Trajectories"),
         hovermode="x unified"
     )
 
@@ -787,7 +824,6 @@ def lyapunov(
 
     state_indices = _resolve_indices(state_indices, num_states)
     labels_full = _resolve_labels(state_labels, num_states)
-
     limits = _resolve_limits(limits)
 
     pairs = list(combinations(state_indices, 2))
@@ -826,8 +862,7 @@ def lyapunov(
             x_range,
             y_range,
             plot_3d=plot_3d,
-            surface_name='Lyapunov Function',
-            contour_name='Lyapunov Function',
+            name='$V(x)$',
         )
 
         trajectory_indices = []
@@ -847,9 +882,13 @@ def lyapunov(
             plot_3d=plot_3d,
             pair_labels=pair_labels,
             pair_limits=pair_limits,
-            title_2d=f"Lyapunov Landscape ({pair_labels[0]} vs {pair_labels[1]})",
-            title_3d=f"Lyapunov Landscape 3D ({pair_labels[0]} vs {pair_labels[1]})",
-            zaxis_title="V(x)",
+            title_2d=(
+                _to_latex(f"Lyapunov Landscape ({pair_labels[0]} vs {pair_labels[1]})")
+            ),
+            title_3d=(
+                _to_latex(f"Lyapunov Landscape 3D ({pair_labels[0]} vs {pair_labels[1]})")
+            ),
+            zaxis_title=_to_latex("$V(x)$"),
         )
 
         _add_visibility_toggle(fig, trajectory_indices, label="Trajectories")
@@ -903,9 +942,9 @@ def relaxed_dp_residual(
         alpha = 1.0
 
     if alpha == 1.0:
-        title = r"$\text{DP Lyapunov residual: } s_n = V_N(x_{n+1}) - V_N(x_n) + \ell(x_n,u_n)$"
+        title = _to_latex(r"DP Lyapunov residual: $s_n = V_N(x_{n+1}) - V_N(x_n) + \ell(x_n,u_n)$")
     elif alpha < 1.0:
-        title = r"$\text{Relaxed DP Lyapunov residual: } s_n(\alpha) = V_N(x_{n+1}) - V_N(x_n) + \alpha \ell(x_n,u_n) \text{ with } \alpha = " + f"{alpha:.3f}$"
+        title = _to_latex(r"Relaxed DP Lyapunov residual: $s_n(\alpha) = V_N(x_{n+1}) - V_N(x_n) + \alpha \ell(x_n,u_n)$ with $\alpha = " + f"{alpha:.3f}$")
 
     per_entry = []  # list of tuples (id, deltas)
     for entry in dataset:
@@ -953,9 +992,9 @@ def relaxed_dp_residual(
                     x=np.arange(deltas.shape[0]),
                     y=deltas,
                     mode='lines',
-                    name=f'Run {id+1} - s<sub>n</sub>',
+                    name=_to_latex(f'Run ${id+1}$ - $s_n(\\alpha)$'),
                     line=dict(color=color, width=2),
-                    legendgroup=f'Run {id+1}',
+                    legendgroup=_to_latex(f'Run ${id+1}$'),
                     showlegend=True,
                 )
             )
@@ -1016,11 +1055,11 @@ def cost_descent(
     if use_optimal_v:
         dim_idx = 0
         V_getter = (lambda t: t.V_N)
-        title = r"$\text{Cost descent check } (V_N)\text{: } \Delta V = V_N(x_{k+1}) - V_N(x_k)$"
+        title = r"Cost descent check ($V_N$): $\Delta V = V_N(x_{k+1}) - V_N(x_k)$"
     else:
         dim_idx = 1
         V_getter = lambda t: t.V_pred
-        title = r"$\text{Cost to go descent check } (V_k)\text{: } \Delta V = V_{k+1} - V_k$"
+        title = r"Cost to go descent check ($V_k$): $\Delta V = V_{k+1} - V_k$"
 
     per_entry_deltas = []  # list of tuples (id, deltas_2d)
     total_lines = 0
@@ -1069,9 +1108,9 @@ def cost_descent(
                         x=np.arange(int(deltas_1d.shape[0])),
                         y=np.asarray(deltas_1d, dtype=float).reshape(-1),
                         mode='lines',
-                        name=f'Run {id+1} - ΔV',
+                        name=_to_latex(f'Run ${id+1}$ - $\Delta V$'),
                         line=dict(color=color, width=2),
-                        legendgroup=f'Run {id+1}',
+                        legendgroup=_to_latex(f'Run ${id+1}$'),
                         showlegend=True,
                     )
                 )
@@ -1089,9 +1128,9 @@ def cost_descent(
                         x=steps,
                         y=deltas,
                         mode='lines',
-                        name=f'Run {id+1} - ΔV',
+                        name=_to_latex(f'Run ${id+1}$ - $\Delta V$'),
                         line=dict(color=color, width=2),
-                        legendgroup=f'Run {id+1}',
+                        legendgroup=_to_latex(f'Run ${id+1}$'),
                         showlegend=True,
                     )
                 )
@@ -1186,8 +1225,7 @@ def roa(
             x_vec,
             y_vec,
             plot_3d=plot_3d,
-            surface_name='Lyapunov Surface',
-            contour_name='V(x) Contours',
+            name='$V(x)$',
         )
         _add_roa_boundary_trace(
             fig,
@@ -1203,9 +1241,9 @@ def roa(
             plot_3d=plot_3d,
             pair_labels=pair_labels,
             pair_limits=pair_limits,
-            title_2d=r"$\text{Stability Verification: ROA for } c = " + f"{c_level:.2f}$",
-            title_3d=f"Stability Verification: ROA for c={c_level:.2f} ({pair_labels[0]} vs {pair_labels[1]})",
-            zaxis_title="V(x)",
+            title_2d=f"Stability Verification: ROA for $c={c_level:.2f}$",
+            title_3d=f"Stability Verification: ROA for $c={c_level:.2f}$ (${pair_labels[0]}$ vs ${pair_labels[1]}$)",
+            zaxis_title="$V(x)$",
         )
         figs[(idx_x, idx_y)] = fig
 

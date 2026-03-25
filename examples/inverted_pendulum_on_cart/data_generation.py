@@ -137,8 +137,8 @@ def main():
     alpha = 1.0 if veri_stats.details.get("asym_stab_report", None) is None else veri_stats.details["asym_stab_report"].min_alpha
     mdg_plots.all(
         dataset=dataset[:min(150, n_samples)],
-        state_labels=["x", "v", "theta", "theta_dot"],
-        control_labels=["a"],
+        state_labels=["$x$", "$v$", "$\\theta$", "$\\dot{\\theta}$"],
+        control_labels=["$a$"],
         time_bound=T_sim * dt,
         plot_3d=False,
         plot_predictions=False,
