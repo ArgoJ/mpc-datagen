@@ -145,7 +145,7 @@ def main():
         alpha=alpha,
         use_optimal_v=False,
         lyapunov_func=lyap_fun,
-        lyap_state_indices=[1, 2],
+        # lyap_state_indices=[1, 2],
         lyap_use_dataset_v=True,
         roa_lyapunov_func=roa_lyap_fun,
         c_level=c_min,

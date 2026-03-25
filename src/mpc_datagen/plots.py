@@ -5,6 +5,8 @@ import plotly.graph_objects as go
 from numpy.typing import NDArray
 from plotly.subplots import make_subplots
 from collections.abc import Callable
+from itertools import combinations
+from skimage import measure
 
 from .mpc_data import MPCDataset
 from pkg_logger import get_package_logger
@@ -50,6 +52,91 @@ def _nanpad_stack_1d(series_list: list[NDArray]) -> NDArray:
     return stacked
 
 
+def _slug(label: str) -> str:
+    cleaned = "".join(ch.lower() if ch.isalnum() else "_" for ch in label)
+    while "__" in cleaned:
+        cleaned = cleaned.replace("__", "_")
+    return cleaned.strip("_") or "state"
+
+
+def _resolve_bounds(bounds: NDArray) -> NDArray:
+    """Validate and normalize state bounds array."""
+    bounds_arr = np.asarray(bounds, dtype=float)
+    if bounds_arr.ndim != 2:
+        raise ValueError("bounds must be a 2D array with shape (n_points, nx).")
+    if int(bounds_arr.shape[1]) < 2:
+        raise ValueError("bounds must contain at least 2 state dimensions.")
+    return bounds_arr
+
+
+def _resolve_labels(state_labels: list[str] | None, num_states: int) -> list[str]:
+    """Resolve default state labels and validate provided labels."""
+    if state_labels is None:
+        return [f"State {i}" for i in range(num_states)]
+    if len(state_labels) != num_states:
+        raise ValueError(
+            f"state_labels length ({len(state_labels)}) must match state dimension ({num_states})."
+        )
+    return state_labels
+
+def _resolve_indices(state_indices: list[int] | None, num_states: int) -> list[int]:
+    """Resolve default state indices and validate provided indices."""
+    if state_indices is None:
+        return list(range(num_states))
+    if any(i < 0 or i >= num_states for i in state_indices):
+        raise ValueError(
+            f"state_indices values must be between 0 and {num_states - 1}."
+        )
+    return state_indices
+
+
+def _resolve_limits(
+    limits: list[tuple[float, float]] | None,
+) -> list[tuple[float, float]] | None:
+    """Validate user-provided 2D limits and normalize to float tuples."""
+    if limits is None:
+        return None
+    if len(limits) != 2:
+        raise ValueError("limits must contain exactly two axis bounds tuples.")
+
+    resolved: list[tuple[float, float]] = []
+    for i, lim in enumerate(limits):
+        if len(lim) != 2:
+            raise ValueError(f"limits[{i}] must contain exactly two values.")
+        lo = float(lim[0])
+        hi = float(lim[1])
+        if lo >= hi:
+            raise ValueError(f"limits[{i}] must satisfy min < max, got ({lo}, {hi}).")
+        resolved.append((lo, hi))
+    return resolved
+
+
+def _infer_pair_limits(
+    x_values: NDArray,
+    y_values: NDArray,
+    *,
+    pad_ratio: float = 0.1,
+    min_pad: float = 1e-12,
+) -> list[tuple[float, float]]:
+    """Infer plotting limits for one state pair from samples with padding."""
+    x = np.asarray(x_values, dtype=float).reshape(-1)
+    y = np.asarray(y_values, dtype=float).reshape(-1)
+    if x.size == 0 or y.size == 0:
+        raise ValueError("Cannot infer limits from empty arrays.")
+
+    x_min = float(np.min(x))
+    x_max = float(np.max(x))
+    y_min = float(np.min(y))
+    y_max = float(np.max(y))
+
+    pad_x = pad_ratio * max(min_pad, x_max - x_min)
+    pad_y = pad_ratio * max(min_pad, y_max - y_min)
+
+    return [
+        (x_min - pad_x, x_max + pad_x),
+        (y_min - pad_y, y_max + pad_y),
+    ]
+
 def _order_boundary_points_xy(x: NDArray, y: NDArray) -> NDArray:
     """Order 2D boundary points by polar angle around centroid.
 
@@ -80,7 +167,6 @@ def _extract_roa_boundary(
     Extrahiert die (x,y) Koordinaten der V(x)=c Kontur aus einem Grid.
     Funktioniert als Blackbox für Matrizen und Neuronale Netze.
     """    
-    from skimage import measure
     contours = measure.find_contours(Z, c_level)
     
     if not contours:
@@ -95,6 +181,359 @@ def _extract_roa_boundary(
     y_points = np.interp(y_idx, np.arange(len(y_vec)), y_vec)
     
     return x_points, y_points
+
+
+def _evaluate_lyapunov(
+    lyapunov_func: Callable[[NDArray], NDArray], points: NDArray
+) -> NDArray:
+    """Evaluate Lyapunov function on a batch with single-point fallback."""
+    try:
+        values = lyapunov_func(points)
+    except Exception:
+        values = np.array([lyapunov_func(s) for s in points])
+    return np.asarray(values, dtype=float).reshape(-1)
+
+
+def _make_pair_grid(
+    pair_limits: list[tuple[float, float]],
+    resolution: int,
+    num_states: int,
+    idx_x: int,
+    idx_y: int,
+) -> tuple[NDArray, NDArray, NDArray, NDArray, NDArray]:
+    """Create a 2D plotting grid embedded in full state dimension."""
+    x_vec = np.linspace(pair_limits[0][0], pair_limits[0][1], resolution)
+    y_vec = np.linspace(pair_limits[1][0], pair_limits[1][1], resolution)
+    X, Y = np.meshgrid(x_vec, y_vec)
+
+    full_points = np.zeros((X.size, num_states), dtype=float)
+    full_points[:, idx_x] = X.ravel()
+    full_points[:, idx_y] = Y.ravel()
+    return x_vec, y_vec, X, Y, full_points
+
+
+def _add_lyapunov_landscape(
+    fig: go.Figure,
+    Z: NDArray,
+    x_vec: NDArray,
+    y_vec: NDArray,
+    *,
+    plot_3d: bool,
+    surface_name: str,
+    contour_name: str,
+) -> None:
+    """Add Lyapunov landscape to a figure."""
+    if plot_3d:
+        fig.add_trace(
+            go.Surface(
+                z=Z,
+                x=x_vec,
+                y=y_vec,
+                colorscale='Viridis',
+                name=surface_name,
+                opacity=0.8,
+                showscale=True,
+            )
+        )
+    else:
+        fig.add_trace(
+            go.Contour(
+                z=Z,
+                x=x_vec,
+                y=y_vec,
+                colorscale='Viridis',
+                name=contour_name,
+                showscale=True,
+                contours=dict(coloring='heatmap', showlabels=True),
+            )
+        )
+
+
+def _add_trajectory_traces(
+    fig: go.Figure,
+    dataset: MPCDataset,
+    idx_x: int,
+    idx_y: int,
+    *,
+    plot_3d: bool,
+    lyapunov_func: Callable[[NDArray], NDArray],
+    use_dataset_v: bool,
+) -> list[int]:
+    """Add closed-loop trajectories and return trace indices for toggling."""
+    indices: list[int] = []
+    for idx, entry in enumerate(dataset):
+        traj = entry.trajectory
+        color = COLORS[idx % len(COLORS)]
+
+        x = traj.states[:-1, idx_x].reshape(-1)
+        y = traj.states[:-1, idx_y].reshape(-1)
+
+        if plot_3d:
+            if use_dataset_v and traj.V_N is not None and traj.V_N.size > 0:
+                v_traj = np.asarray(traj.V_N, dtype=float).reshape(-1)
+            else:
+                v_traj = _evaluate_lyapunov(lyapunov_func, traj.states)
+
+            if v_traj.shape != x.shape:
+                __logger__.debug(
+                    f"Trajectory {idx+1} cost shape {v_traj.shape} does not match state shape {x.shape}; skipping."
+                )
+                continue
+
+            fig.add_trace(
+                go.Scatter3d(
+                    x=x,
+                    y=y,
+                    z=v_traj,
+                    mode='lines',
+                    name=f'Run {idx+1}',
+                    line=dict(color=color, width=4),
+                    showlegend=False,
+                )
+            )
+        else:
+            fig.add_trace(
+                go.Scatter(
+                    x=x,
+                    y=y,
+                    mode='lines',
+                    name=f'Run {idx+1}',
+                    line=dict(color=color, width=2),
+                    opacity=0.7,
+                    showlegend=False,
+                )
+            )
+
+        indices.append(len(fig.data) - 1)
+    return indices
+
+
+def _add_roa_boundary_trace(
+    fig: go.Figure,
+    x_vec: NDArray,
+    y_vec: NDArray,
+    Z: NDArray,
+    c_level: float,
+    *,
+    plot_3d: bool,
+) -> None:
+    """Extract and add V(x)=c boundary trace to a figure."""
+    b_x, b_y = _extract_roa_boundary(x_vec, y_vec, Z, c_level)
+    if b_x.size > 0:
+        b_x = np.concatenate([b_x, b_x[:1]])
+        b_y = np.concatenate([b_y, b_y[:1]])
+
+    if plot_3d:
+        b_z = np.full_like(b_x, c_level)
+        fig.add_trace(
+            go.Scatter3d(
+                x=b_x,
+                y=b_y,
+                z=b_z,
+                mode='lines',
+                line=dict(color='red', width=4),
+                name=f'$\\text{{ROA Boundary (c={c_level:.2f})}}$',
+            )
+        )
+    else:
+        fig.add_trace(
+            go.Scatter(
+                x=b_x,
+                y=b_y,
+                mode='lines',
+                line=dict(color='red', width=3, dash='dash'),
+                fill='toself',
+                fillcolor='rgba(255,0,0,0.1)',
+                name=f'$\\text{{ROA Boundary (c={c_level:.2f})}}$',
+            )
+        )
+
+
+def _apply_pair_layout(
+    fig: go.Figure,
+    *,
+    plot_3d: bool,
+    pair_labels: list[str],
+    pair_limits: list[tuple[float, float]],
+    title_2d: str,
+    title_3d: str,
+    zaxis_title: str = "V(x)",
+) -> None:
+    """Apply standard 2D/3D layout for a state-pair figure."""
+    if plot_3d:
+        fig.update_layout(
+            title_text=title_3d,
+            scene=dict(
+                xaxis_title=pair_labels[0],
+                yaxis_title=pair_labels[1],
+                zaxis_title=zaxis_title,
+            ),
+            width=1000,
+            height=800,
+            autosize=True,
+            legend=dict(x=1.05, y=1),
+            margin=dict(l=0, r=50, b=0, t=50),
+        )
+    else:
+        fig.update_layout(
+            title_text=title_2d,
+            xaxis=dict(
+                title=pair_labels[0],
+                range=[pair_limits[0][0], pair_limits[0][1]],
+            ),
+            yaxis=dict(
+                title=pair_labels[1],
+                range=[pair_limits[1][0], pair_limits[1][1]],
+            ),
+            legend=dict(x=1.05, y=1),
+            autosize=True,
+            margin=dict(l=0, r=50, b=0, t=50),
+        )
+
+
+def _add_visibility_toggle(fig: go.Figure, trace_indices: list[int], label: str) -> None:
+    """Add toggle button for a subset of traces."""
+    if not trace_indices:
+        return
+
+    fig.update_layout(
+        updatemenus=[
+            dict(
+                type="buttons",
+                direction="left",
+                buttons=list([
+                    dict(
+                        args=[{"visible": True}, trace_indices],
+                        args2=[{"visible": False}, trace_indices],
+                        label=label,
+                        method="restyle",
+                    )
+                ]),
+                pad={"r": 10, "t": 10},
+                showactive=True,
+                x=1.0,
+                xanchor="right",
+                y=-0.05,
+                yanchor="top",
+            ),
+        ]
+    )
+
+
+def _save_pair_figures(
+    figs: dict[tuple[int, int], go.Figure],
+    html_path: str,
+    labels_full: list[str],
+    *,
+    kind: str,
+) -> None:
+    """Save one or multiple pair figures to html files."""
+    dir_path = os.path.dirname(html_path)
+    if dir_path:
+        os.makedirs(dir_path, exist_ok=True)
+
+    if len(figs) == 1:
+        next(iter(figs.values())).write_html(html_path, include_mathjax='cdn')
+        __logger__.info(f"{kind} plot saved to {html_path}.")
+        return
+
+    root, ext = os.path.splitext(html_path)
+    suffix = ext if ext else ".html"
+    for (idx_x, idx_y), fig in figs.items():
+        file_path = f"{root}_{_slug(labels_full[idx_x])}_vs_{_slug(labels_full[idx_y])}{suffix}"
+        fig.write_html(file_path, include_mathjax='cdn')
+        __logger__.info(f"{kind} plot saved to {file_path}.")
+
+
+def _add_summary_band(
+    fig: go.Figure,
+    stacked: NDArray,
+    steps: NDArray | None = None,
+) -> None:
+    """Add max/min envelope plus mean and median lines for stacked data."""
+    if stacked.size == 0:
+        return
+
+    x = np.arange(stacked.shape[1]) if steps is None else np.asarray(steps)
+    y_min = np.nanmin(stacked, axis=0)
+    y_max = np.nanmax(stacked, axis=0)
+    y_mean = np.nanmean(stacked, axis=0)
+    y_median = np.nanmedian(stacked, axis=0)
+
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=y_max,
+            mode='lines',
+            name='max',
+            line=dict(color='red', width=2),
+            showlegend=True,
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=y_min,
+            mode='lines',
+            name='min',
+            line=dict(color='red', width=2),
+            fill='tonexty',
+            fillcolor='rgba(255,0,0,0.3)',
+            showlegend=True,
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=y_mean,
+            mode='lines',
+            name='mean',
+            line=dict(color='black', width=2, dash='dash'),
+            showlegend=True,
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=y_median,
+            mode='lines',
+            name='median',
+            line=dict(color='blue', width=2),
+            showlegend=True,
+        )
+    )
+
+
+def _add_zero_reference_line(fig: go.Figure, x_start: float, x_end: float) -> None:
+    """Add horizontal zero reference line to a figure."""
+    fig.add_trace(
+        go.Scatter(
+            x=[x_start, x_end],
+            y=[0, 0],
+            mode='lines',
+            line=dict(color='black', width=1, dash='dash'),
+            showlegend=False,
+            hoverinfo='skip',
+        )
+    )
+
+
+def _apply_timeseries_layout(
+    fig: go.Figure,
+    *,
+    title_text: str,
+    xaxis_title: str,
+    yaxis_title: str,
+    margin_top: int = 120,
+) -> None:
+    """Apply common layout for time-series style plots."""
+    fig.update_layout(
+        title_text=title_text,
+        xaxis_title=xaxis_title,
+        yaxis_title=yaxis_title,
+        hovermode="x unified",
+        margin=dict(t=margin_top),
+    )
 
 
 def mpc_trajectories(
@@ -298,16 +737,18 @@ def mpc_trajectories(
 def lyapunov(
     lyapunov_func: Callable[[NDArray], NDArray],
     dataset: MPCDataset | None = None,
-    state_indices: list = [0, 1],
+    state_indices: list[int] | None = None,
     state_labels: list[str] | None = None,
-    limits: list = None,
+    limits: list[tuple[float, float]] | None = None,
     resolution: int = 100,
     plot_3d: bool = False,
-    html_path: str = None,
+    html_path: str | None = None,
     use_dataset_v: bool = False,
 ):
-    """Plot Lyapunov landscape, trajectories, and optional certified regions in 2D/3D.
-    Only two state dimensions can be visualized at once.
+    """Plot Lyapunov landscapes and trajectories for all 2D state pairs.
+
+    If more than two state indices are provided, one figure per 2D combination
+    is generated.
 
     Parameters
     ----------
@@ -316,8 +757,9 @@ def lyapunov(
     dataset : MPCDataset, optional
         The dataset containing trajectories to plot. If None, only the
         Lyapunov landscape and optional regions are shown. Default is None.
-    state_indices : list, optional
-        Indices of the two state variables to plot (x, y axes). Default is [0, 1].
+    state_indices : list[int], optional
+        State indices to consider. If None, all states are used and all pairwise
+        combinations are plotted.
     state_labels : list[str], optional
         Labels for the plotted state dimensions. Defaults to ["State i", "State j"].
     limits : list of tuples, optional
@@ -331,238 +773,96 @@ def lyapunov(
     use_dataset_v : bool, optional
         If True, uses the dataset's value function for trajectory coloring instead of the horizon cost.
     """
-    if len(state_indices) != 2:
-        raise ValueError("state_indices must contain exactly 2 indices.")
-
-    if min(state_indices) < 0:
-        raise ValueError("state_indices must be non-negative.")
-
     has_dataset = dataset is not None and len(dataset) > 0
 
-    # Infer state dimension from dataset if present, otherwise from indices.
     if has_dataset:
         first_traj = dataset[0].trajectory
-        num_states = first_traj.states.shape[1]
+        num_states = int(first_traj.states.shape[1])
     else:
-        num_states = max(state_indices) + 1
-
-    idx_x, idx_y = state_indices
-
-    if idx_x >= num_states or idx_y >= num_states:
-        raise ValueError(
-            f"state_indices {state_indices} exceed inferred state dimension {num_states}."
-        )
-
-    if state_labels is None:
-        state_labels = [f"State {idx_x}", f"State {idx_y}"]
-    if len(state_labels) != 2:
-        raise ValueError("state_labels must contain exactly 2 labels.")
-
-    # Determine limits if not provided
-    if limits is None:
-        min_x = max_x = min_y = max_y = None
-
-        if has_dataset:
-            all_states = np.vstack([d.trajectory.states for d in dataset])
-            min_x = all_states[:, idx_x].min()
-            max_x = all_states[:, idx_x].max()
-            min_y = all_states[:, idx_y].min()
-            max_y = all_states[:, idx_y].max()
-
-        if min_x is None:
-            __logger__.warning(
-                "Could not infer limits without dataset/regions. Falling back to [-1, 1]^2."
+        if state_indices is None:
+            raise ValueError(
+                "Without dataset, state_indices must be provided to infer state dimension."
             )
-            limits = None
-        else:
-            # Add some padding
-            pad_x = (max_x - min_x) * 0.1 if max_x != min_x else 1.0
-            pad_y = (max_y - min_y) * 0.1 if max_y != min_y else 1.0
+        num_states = int(max(state_indices) + 1)
 
-            limits = [
-                (min_x - pad_x, max_x + pad_x),
-                (min_y - pad_y, max_y + pad_y)
-            ]
+    state_indices = _resolve_indices(state_indices, num_states)
+    labels_full = _resolve_labels(state_labels, num_states)
 
-    # === LYAPUNOV FUNCTION PLOT ===
-    # Create grid for Lyapunov function
-    x_range = np.linspace(limits[0][0], limits[0][1], resolution)
-    y_range = np.linspace(limits[1][0], limits[1][1], resolution)
-    X, Y = np.meshgrid(x_range, y_range)
-    
-    # Prepare grid points for evaluation
-    grid_points = np.zeros((X.size, num_states))
-    grid_points[:, idx_x] = X.flatten()
-    grid_points[:, idx_y] = Y.flatten()
-    
-    # Evaluate Lyapunov function
-    try:
-        Z_flat = lyapunov_func(grid_points)
-    except Exception:
-        Z_flat = np.array([lyapunov_func(s) for s in grid_points])
-        
-    if hasattr(Z_flat, 'ndim') and Z_flat.ndim > 1:
-        Z_flat = Z_flat.flatten()
-    elif isinstance(Z_flat, list):
-        Z_flat = np.array(Z_flat)
-        
-    Z = Z_flat.reshape(X.shape)
+    limits = _resolve_limits(limits)
 
-    fig = go.Figure()
+    pairs = list(combinations(state_indices, 2))
+    figs: dict[tuple[int, int], go.Figure] = {}
 
-    # Plot Lyapunov Landscape
-    if plot_3d:
-        fig.add_trace(
-            go.Surface(
-                z=Z,
-                x=x_range,
-                y=y_range,
-                colorscale='Viridis',
-                name='Lyapunov Function',
-                opacity=0.8,
-                showscale=True
-            )
-        )
-    else:
-        fig.add_trace(
-            go.Contour(
-                z=Z,
-                x=x_range,
-                y=y_range,
-                colorscale='Viridis',
-                name='Lyapunov Function',
-                showscale=True,
-                contours=dict(
-                    coloring='heatmap',
-                    showlabels=True,
-                )
-            )
-        )
+    for idx_x, idx_y in pairs:
+        pair_labels = [labels_full[idx_x], labels_full[idx_y]]
 
-    # === MPC TRAJECTORIES ===
-    trajectory_indices = []
-    colors = [
-        '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', 
-        '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf'
-    ]
-
-    if has_dataset:
-        for idx, entry in enumerate(dataset):
-            traj = entry.trajectory
-            color = colors[idx % len(colors)]
-
-            x = traj.states[:-1, idx_x].flatten()
-            y = traj.states[:-1, idx_y].flatten()
-
-            if plot_3d:
-                if use_dataset_v and traj.V_N is not None and traj.V_N.size > 0:
-                    v_traj = traj.V_N
-                else:
-                    try:
-                        v_traj = lyapunov_func(traj.states)
-                    except Exception: # Fallback to loop if lyapunov_func cannot handle batch input
-                        v_traj = np.array([lyapunov_func(s) for s in traj.states])
-
-                if v_traj.shape != x.shape or v_traj.shape != y.shape:
-                    __logger__.debug(
-                        f"Trajectory {idx+1} cost shape {v_traj.shape} does not match state shape {x.shape}; skipping."
-                    )
-                    continue
-                
-                if hasattr(v_traj, 'ndim') and v_traj.ndim > 1:
-                    v_traj = v_traj.flatten()
-                elif isinstance(v_traj, list):
-                    v_traj = np.array(v_traj)
-
-                fig.add_trace(
-                    go.Scatter3d(
-                        x=x, y=y,
-                        z=v_traj,
-                        mode='lines',
-                        name=f'Run {idx+1}',
-                        line=dict(color=color, width=4),
-                        showlegend=False
-                    )
+        if limits is None:
+            if has_dataset:
+                all_states = np.vstack([d.trajectory.states for d in dataset])
+                pair_limits = _infer_pair_limits(
+                    all_states[:, idx_x],
+                    all_states[:, idx_y],
+                    pad_ratio=0.1,
+                    min_pad=1e-12,
                 )
             else:
-                fig.add_trace(
-                    go.Scatter(
-                        x=x, y=y,
-                        mode='lines',
-                        name=f'Run {idx+1}',
-                        line=dict(color=color, width=2),
-                        opacity=0.7,
-                        showlegend=False
-                    )
+                __logger__.warning(
+                    "Could not infer limits without dataset. Falling back to [-1, 1]^2."
                 )
-            trajectory_indices.append(len(fig.data) - 1)
+                pair_limits = [(-1.0, 1.0), (-1.0, 1.0)]
+        else:
+            pair_limits = limits
 
-
-    # === CONFIGURE LAYOUT ===
-    if plot_3d:
-        fig.update_layout(
-            title_text=(
-                f"Lyapunov Landscape 3D"
-                f"({state_labels[0]} vs {state_labels[1]})"
-            ),
-            scene=dict(
-                xaxis_title=state_labels[0],
-                yaxis_title=state_labels[1],
-                zaxis_title="V(x)",
-            ),
-            width=1000,
-            height=800,
-            autosize=True
+        x_range, y_range, X, _, grid_points = _make_pair_grid(
+            pair_limits, resolution, num_states, idx_x, idx_y
         )
-    else:
-        fig.update_layout(
-            title_text=(
-                f"Lyapunov Landscape "
-                f"({state_labels[0]} vs {state_labels[1]})"
-            ),
-            xaxis=dict(
-                title=state_labels[0],
-                range=[limits[0][0], limits[0][1]]
-            ),
-            yaxis=dict(
-                title=state_labels[1],
-                range=[limits[1][0], limits[1][1]],
+        Z_flat = _evaluate_lyapunov(lyapunov_func, grid_points)
+        Z = Z_flat.reshape(X.shape)
+
+        fig = go.Figure()
+        _add_lyapunov_landscape(
+            fig,
+            Z,
+            x_range,
+            y_range,
+            plot_3d=plot_3d,
+            surface_name='Lyapunov Function',
+            contour_name='Lyapunov Function',
+        )
+
+        trajectory_indices = []
+        if has_dataset:
+            trajectory_indices = _add_trajectory_traces(
+                fig,
+                dataset,
+                idx_x,
+                idx_y,
+                plot_3d=plot_3d,
+                lyapunov_func=lyapunov_func,
+                use_dataset_v=use_dataset_v,
             )
+
+        _apply_pair_layout(
+            fig,
+            plot_3d=plot_3d,
+            pair_labels=pair_labels,
+            pair_limits=pair_limits,
+            title_2d=f"Lyapunov Landscape ({pair_labels[0]} vs {pair_labels[1]})",
+            title_3d=f"Lyapunov Landscape 3D ({pair_labels[0]} vs {pair_labels[1]})",
+            zaxis_title="V(x)",
         )
-    
-    # Toggle Button for Trajectories
-    if trajectory_indices:
-        fig.update_layout(
-            updatemenus=[
-                dict(
-                    type="buttons",
-                    direction="left",
-                    buttons=list([
-                        dict(
-                            args=[{"visible": True}, trajectory_indices],
-                            args2=[{"visible": False}, trajectory_indices],
-                            label="Trajectories",
-                            method="restyle"
-                        )
-                    ]),
-                    pad={"r": 10, "t": 10},
-                    showactive=True,
-                    x=1.0,
-                    xanchor="right",
-                    y=-0.05,
-                    yanchor="top"
-                ),
-            ]
-        )
+
+        _add_visibility_toggle(fig, trajectory_indices, label="Trajectories")
+
+        figs[(idx_x, idx_y)] = fig
 
     if html_path is not None:
-        dir_path = os.path.dirname(html_path)
-        if dir_path:
-            os.makedirs(dir_path, exist_ok=True)
-        fig.write_html(html_path, include_mathjax='cdn')
-        __logger__.info(f"Trajectories plot saved to {html_path}.")
-    else:
-        return fig
+        _save_pair_figures(figs, html_path, labels_full, kind="Lyapunov")
+        return None
+
+    if len(figs) == 1:
+        return next(iter(figs.values()))
+    return figs
 
 def relaxed_dp_residual(
     dataset: MPCDataset,
@@ -644,56 +944,7 @@ def relaxed_dp_residual(
             f"relaxed_dp_residual: {n_lines} lines exceed threshold {SUMMARY_LINE_THRESHOLD}; plotting summary stats."
         )
         stacked = _nanpad_stack_1d([d for _, d in per_entry])
-        steps = np.arange(stacked.shape[1])
-
-        y_min = np.nanmin(stacked, axis=0)
-        y_max = np.nanmax(stacked, axis=0)
-        y_mean = np.nanmean(stacked, axis=0)
-        y_median = np.nanmedian(stacked, axis=0)
-
-        fig.add_trace(
-            go.Scatter(
-                x=steps,
-                y=y_max,
-                mode='lines',
-                name='max',
-                line=dict(color='red', width=2),
-                showlegend=True,
-            )
-        )
-        # Fill the envelope between max (previous trace) and min (this trace).
-        fig.add_trace(
-            go.Scatter(
-                x=steps,
-                y=y_min,
-                mode='lines',
-                name='min',
-                line=dict(color='red', width=2),
-                fill='tonexty',
-                fillcolor='rgba(255,0,0,0.3)',
-                showlegend=True,
-            )
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=steps,
-                y=y_mean,
-                mode='lines',
-                name='mean',
-                line=dict(color='black', width=2, dash='dash'),
-                showlegend=True,
-            )
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=steps,
-                y=y_median,
-                mode='lines',
-                name='median',
-                line=dict(color='blue', width=2),
-                showlegend=True,
-            )
-        )
+        _add_summary_band(fig, stacked)
     else:
         for id, deltas in per_entry:
             color = COLORS[id % len(COLORS)]
@@ -709,23 +960,12 @@ def relaxed_dp_residual(
                 )
             )
 
-    fig.add_trace(
-        go.Scatter(
-            x=[0, max(1, max_len - 1)],
-            y=[0, 0],
-            mode='lines',
-            line=dict(color='black', width=1, dash='dash'),
-            showlegend=False,
-            hoverinfo='skip'
-        )
-    )
-
-    fig.update_layout(
+    _add_zero_reference_line(fig, 0, max(1, max_len - 1))
+    _apply_timeseries_layout(
+        fig,
         title_text=title,
         xaxis_title=r"$n$",
         yaxis_title=r"$s_n(\alpha)$",
-        hovermode="x unified",
-        margin=dict(t=120),
     )
 
     if html_path is not None:
@@ -819,54 +1059,7 @@ def cost_descent(
             stacked = _nanpad_stack_1d(lines_1d)  # (total_lines, max_n_steps)
             steps = np.arange(stacked.shape[1])
 
-        y_min = np.nanmin(stacked, axis=0)
-        y_max = np.nanmax(stacked, axis=0)
-        y_mean = np.nanmean(stacked, axis=0)
-        y_median = np.nanmedian(stacked, axis=0)
-
-        fig.add_trace(
-            go.Scatter(
-                x=steps,
-                y=y_max,
-                mode='lines',
-                name='max',
-                line=dict(color='red', width=2),
-                showlegend=True,
-            )
-        )
-        # Fill the envelope between max (previous trace) and min (this trace).
-        fig.add_trace(
-            go.Scatter(
-                x=steps,
-                y=y_min,
-                mode='lines',
-                name='min',
-                line=dict(color='red', width=2),
-                fill='tonexty',
-                fillcolor='rgba(255,0,0,0.3)',
-                showlegend=True,
-            )
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=steps,
-                y=y_mean,
-                mode='lines',
-                name='mean',
-                line=dict(color='black', width=2, dash='dash'),
-                showlegend=True,
-            )
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=steps,
-                y=y_median,
-                mode='lines',
-                name='median',
-                line=dict(color='blue', width=2),
-                showlegend=True,
-            )
-        )
+        _add_summary_band(fig, stacked, steps)
     else:
         if use_optimal_v:
             for id, deltas_1d in per_entry_deltas:
@@ -903,23 +1096,12 @@ def cost_descent(
                     )
                 )
 
-    fig.add_trace(
-        go.Scatter(
-            x=[0, 1],
-            y=[0, 0],
-            mode='lines',
-            line=dict(color='black', width=1, dash='dash'),
-            showlegend=False,
-            hoverinfo='skip'
-        )
-    )
-
-    fig.update_layout(
+    _add_zero_reference_line(fig, 0, 1)
+    _apply_timeseries_layout(
+        fig,
         title_text=title,
         xaxis_title=r"$k$",
         yaxis_title=r"$\Delta V_k$",
-        hovermode="x unified",
-        margin=dict(t=120),
     )
 
     if html_path is not None:
@@ -933,121 +1115,107 @@ def roa(
     lyapunov_func: Callable[[NDArray], NDArray],
     c_level: float,
     bounds: NDArray,  # shape (n_points, nx)
-    state_indices: list[int] = [0, 1],
+    state_indices: list[int] | None = None,
     state_labels: list[str] | None = None,
     limits: list[tuple[float, float]] | None = None,
     resolution: int = 100,
     plot_3d: bool = False,
     html_path: str | None = None
-) -> go.Figure | None:
-    
-    if len(state_indices) != 2:
-        raise ValueError("state_indices must contain exactly 2 indices.")
+) -> dict[tuple[int, int], go.Figure] | go.Figure | None:
+    """_summary_
 
-    idx_x, idx_y = state_indices
-    
-    if state_labels is None:
-        state_labels = [f"State {idx_x}", f"State {idx_y}"]
-    
-    if limits is None:
-        b_x = bounds[:, idx_x]
-        b_y = bounds[:, idx_y]
-        pad_x = 0.1 * max(1e-12, float(np.max(b_x) - np.min(b_x)))
-        pad_y = 0.1 * max(1e-12, float(np.max(b_y) - np.min(b_y)))
-        limits = [
-            (float(np.min(b_x) - pad_x), float(np.max(b_x) + pad_x)),
-            (float(np.min(b_y) - pad_y), float(np.max(b_y) + pad_y)),
-        ]
+    Parameters
+    ----------
+    lyapunov_func : Callable[[NDArray], NDArray]
+        _description_
+    c_level : float
+        _description_
+    bounds : NDArray
+        _description_
+    state_labels : list[str] | None, optional
+        _description_, by default None
+    limits : list[tuple[float, float]] | None, optional
+        _description_, by default None
+    resolution : int, optional
+        _description_, by default 100
+    plot_3d : bool, optional
+        _description_, by default False
+    html_path : str | None, optional
+        _description_, by default None
 
-    # Grid for Lyapunov function
-    x_vec = np.linspace(limits[0][0], limits[0][1], resolution)
-    y_vec = np.linspace(limits[1][0], limits[1][1], resolution)
-    X, Y = np.meshgrid(x_vec, y_vec)
-    
-    dim_x = max(max(state_indices) + 1, bounds.shape[1])
-    points_2d = np.vstack([X.ravel(), Y.ravel()]).T
-    full_points = np.zeros((points_2d.shape[0], dim_x))
-    full_points[:, idx_x] = points_2d[:, 0]
-    full_points[:, idx_y] = points_2d[:, 1]
-    
-    Z_flat = lyapunov_func(full_points)
-    Z = Z_flat.reshape(X.shape)
+    Returns
+    -------
+    dict[tuple[int, int], go.Figure] | go.Figure | None
+        _description_
+    """
+    bounds_arr = _resolve_bounds(bounds)
+    nx = int(bounds_arr.shape[1])
 
-    fig = go.Figure()
+    state_indices = _resolve_indices(state_indices, nx)
+    labels_full = _resolve_labels(state_labels, nx)
 
-    # --- Lyapunov Function V(x) ---
-    if plot_3d:
-        fig.add_trace(go.Surface(
-            z=Z, x=x_vec, y=y_vec,
-            colorscale='Viridis', opacity=0.8,
-            name='Lyapunov Surface', showlegend=True,
-            colorbar=dict(title="V(x)", x=-0.1)
-        ))
-    else:
-        fig.add_trace(go.Contour(
-            z=Z, x=x_vec, y=y_vec,
-            colorscale='Viridis', name='V(x) Contours',
-            opacity=0.6, contours=dict(showlabels=True),
-            showlegend=True
-        ))
+    limits = _resolve_limits(limits)
 
-    # --- ROA Boundary (Scatter/Line) ---
-    b_x, b_y = _extract_roa_boundary(x_vec, y_vec, Z, c_level)
+    pairs = list(combinations(state_indices, 2))
+    figs: dict[tuple[int, int], go.Figure] = {}
 
-    # Close the loop
-    if b_x.size > 0:
-        b_x = np.concatenate([b_x, b_x[:1]])
-        b_y = np.concatenate([b_y, b_y[:1]])
+    for idx_x, idx_y in pairs:
+        pair_labels = [labels_full[idx_x], labels_full[idx_y]]
 
-    if plot_3d:
-        b_z = np.full_like(b_x, c_level)
-        fig.add_trace(go.Scatter3d(
-            x=b_x, y=b_y, z=b_z,
-            mode='lines',
-            line=dict(color='red', width=4),
-            name=f'$\\text{{ROA Boundary (c={c_level:.2f})}}$'
-        ))
-    else:
-        fig.add_trace(go.Scatter(
-            x=b_x, y=b_y,
-            mode='lines',
-            line=dict(color='red', width=3, dash='dash'),
-            fill='toself',
-            fillcolor='rgba(255,0,0,0.1)',
-            name=f'$\\text{{ROA Boundary (c={c_level:.2f})}}$'
-        ))
+        if limits is None:
+            pair_limits = _infer_pair_limits(
+                bounds_arr[:, idx_x],
+                bounds_arr[:, idx_y],
+                pad_ratio=0.1,
+                min_pad=1e-12,
+            )
+        else:
+            pair_limits = limits
 
-    # --- Layout ---
-    layout_args = dict(
-        title=f"Stability Verification: ROA for c={c_level:.2f}" if plot_3d else r"$\text{Stability Verification: ROA for } c = " + f"{c_level:.2f}$",
-        legend=dict(x=1.05, y=1),
-        autosize=True,
-        margin=dict(l=0, r=50, b=0, t=50)
-    )
-    
-    if plot_3d:
-        layout_args['scene'] = dict(
-            xaxis_title=state_labels[0],
-            yaxis_title=state_labels[1],
-            zaxis_title="V(x)"
+        x_vec, y_vec, X, _, full_points = _make_pair_grid(
+            pair_limits, resolution, nx, idx_x, idx_y
         )
-    else:
-        layout_args['xaxis'] = dict(
-            title=state_labels[0],
-            range=[limits[0][0], limits[0][1]]
+        Z_flat = _evaluate_lyapunov(lyapunov_func, full_points)
+        Z = Z_flat.reshape(X.shape)
+
+        fig = go.Figure()
+
+        _add_lyapunov_landscape(
+            fig,
+            Z,
+            x_vec,
+            y_vec,
+            plot_3d=plot_3d,
+            surface_name='Lyapunov Surface',
+            contour_name='V(x) Contours',
         )
-        layout_args['yaxis'] = dict(
-            title=state_labels[1],
-            range=[limits[1][0], limits[1][1]],
+        _add_roa_boundary_trace(
+            fig,
+            x_vec,
+            y_vec,
+            Z,
+            c_level,
+            plot_3d=plot_3d,
         )
 
-    fig.update_layout(**layout_args)
+        _apply_pair_layout(
+            fig,
+            plot_3d=plot_3d,
+            pair_labels=pair_labels,
+            pair_limits=pair_limits,
+            title_2d=r"$\text{Stability Verification: ROA for } c = " + f"{c_level:.2f}$",
+            title_3d=f"Stability Verification: ROA for c={c_level:.2f} ({pair_labels[0]} vs {pair_labels[1]})",
+            zaxis_title="V(x)",
+        )
+        figs[(idx_x, idx_y)] = fig
 
     if html_path:
-        os.makedirs(os.path.dirname(html_path), exist_ok=True)
-        fig.write_html(html_path, include_mathjax='cdn')
-    else:
-        return fig
+        _save_pair_figures(figs, html_path, labels_full, kind="ROA")
+        return None
+
+    if len(figs) == 1:
+        return next(iter(figs.values()))
+    return figs
 
 
 def all(
@@ -1071,7 +1239,7 @@ def all(
 
     # lyapunov specific
     lyapunov_func: Callable[[NDArray], NDArray] = None,
-    lyap_state_indices: list[int] = [0, 1],
+    lyap_state_indices: list[int] | None = None,
     lyap_use_dataset_v: bool = False,
 
     # roa specific
@@ -1080,7 +1248,7 @@ def all(
     roa_bounds: NDArray = None,
 ) -> None:
     """Convenience function to plot trajectories, residuals, Lyapunov, and ROA together."""
-    lyap_state_labels = [state_labels[i] for i in lyap_state_indices] if state_labels else None
+    lyap_state_labels = state_labels
 
     mpc_trajectories(
         dataset=dataset,
@@ -1124,7 +1292,7 @@ def all(
         c_level=c_level,
         bounds=roa_bounds,
         state_indices=lyap_state_indices,
-        state_labels=lyap_state_labels,
+        state_labels=state_labels,
         limits=limits,
         resolution=resolution,
         plot_3d=plot_3d,

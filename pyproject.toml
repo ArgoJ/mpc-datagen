@@ -16,6 +16,7 @@ dependencies = [
     "casadi",
     "h5py",
     "rich",
+    "scikit-image",
     "pkg-logger",
 ]
 
