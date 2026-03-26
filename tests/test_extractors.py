@@ -11,8 +11,8 @@ SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
 from mpc_datagen.extractor import (
-    LinearSystemExtractor, 
-    extract_cfg
+    extract_cfg, 
+    extract_discretized_dynamics
 )
 
 from acados_solver_example import get_basic_double_integrator_ocp_solver
@@ -24,7 +24,7 @@ class TestExtractors(unittest.TestCase):
         self.solver, self.system_info = get_basic_double_integrator_ocp_solver()
         
     def test_passes_linear_system_extraction(self) -> None:
-        extracted = LinearSystemExtractor.get_system(self.solver)
+        extracted = extract_discretized_dynamics(self.solver)
 
         np.testing.assert_allclose(extracted.A, self.system_info["A_d"])
         np.testing.assert_allclose(extracted.B, self.system_info["B_d"])
