@@ -183,6 +183,11 @@ def _infer_pair_limits(
         (y_min - pad_y, y_max + pad_y),
     ]
 
+def _state_index_pairs(state_indices: list[int]) -> list[tuple[int, int]]:
+    if len(state_indices) < 2:
+        raise ValueError("state_indices must contain at least 2 indices.")
+    return list(combinations(state_indices, 2))
+
 def _plotly_multiline(x: NDArray, axis: int=0):
     if axis == 0:
         return np.hstack([x, np.full((x.shape[0], 1), np.nan)]).flatten()
@@ -826,7 +831,7 @@ def lyapunov(
     labels_full = _resolve_labels(state_labels, num_states)
     limits = _resolve_limits(limits)
 
-    pairs = list(combinations(state_indices, 2))
+    pairs = _state_index_pairs(state_indices)
     figs: dict[tuple[int, int], go.Figure] = {}
 
     for idx_x, idx_y in pairs:
@@ -1195,7 +1200,7 @@ def roa(
 
     limits = _resolve_limits(limits)
 
-    pairs = list(combinations(state_indices, 2))
+    pairs = _state_index_pairs(state_indices)
     figs: dict[tuple[int, int], go.Figure] = {}
 
     for idx_x, idx_y in pairs:
