@@ -31,6 +31,7 @@ class StabilityVerifier:
         self.dataset = dataset
         self.only_feasible = only_feasible
         self.eps = 1e-6
+        self._ref_entry = dataset[0] if len(dataset) > 0 else None
 
         # Bindable entry 
         self._active_entry: MPCData | None = None
@@ -184,6 +185,15 @@ class StabilityVerifier:
 
 
     # --- LYAPUNOV DESCENT CHECK ---
+    @staticmethod
+    def can_use_lyapunov_descent(data: MPCData) -> bool:
+        """Check if the trajectory contains enough V_N values to compute Lyapunov descent."""
+        if data.trajectory.V_N is None:
+            __logger__.warning(
+                "Trajectory does not contain enough V_N values to compute descent.")
+            return False
+        return True
+
     def lyapunov_descent(self) -> NDArray:
         """Calculate $V_N(x_{k+1}) - V_N(x_k)$ for the current trajectory.
 
@@ -193,7 +203,6 @@ class StabilityVerifier:
             The sequence of Lyapunov differences V_N(x_{k+1}) - V_N(x_k).
             Values <= 0 satisfy the decrease condition.
         """
-        self._require_bound_entry()
         limit = min(self.T_sim, len(self.traj.V_N))
         if limit < 2:
             return np.array([])
@@ -216,6 +225,12 @@ class StabilityVerifier:
         report : LyapunovDescentReport
             Report summarizing the descent check results.
         """
+        if not self.can_use_lyapunov_descent(self._ref_entry):
+            return LyapunovDescentReport(
+                is_stable=False,
+                message="NOT APPLICABLE: Trajectory does not contain enough V_N values to compute descent."
+            )
+
         max_increase = 0.0
         violation_count = 0
         total_steps = 0
@@ -255,6 +270,23 @@ class StabilityVerifier:
 
 
     # --- ALPHA-DECAY CHECK ---
+    @staticmethod
+    def resolve_relaxed_descent(data: MPCData) -> bool:
+        """Check if the trajectory contains enough V_N values and stage cost to compute relaxed descent."""
+        if data.trajectory.V_N is None:
+            __logger__.warning(
+                "Trajectory does not contain enough V_N values to compute relaxed descent.")
+            return False
+        if len(data.trajectory.states) == 0 or len(data.trajectory.inputs) == 0:
+            __logger__.warning(
+                "Trajectory does not contain states and inputs required to compute stage cost for relaxed descent.")
+            return False
+        if not data.config.cost.has_stage_cost():
+            __logger__.warning(
+                "Cost function does not contain Vx and Vu required to compute stage cost for relaxed descent.")
+            return False
+        return True
+
     def alpha_and_max_violation(self, alpha_required: float = 1e-3) -> AlphaViolationStats:
         r"""
         Estimates the *observed* alpha and maximum violation for steps with significant stage cost.
@@ -271,17 +303,17 @@ class StabilityVerifier:
             The observed minimum alpha and maximum violation statistics.
         """
         self._require_bound_entry()
-        T_limit = min(self.T_sim, len(self.traj.inputs), len(self.traj.states) - 1, len(self.traj.V_N) - 1)
-        if T_limit < 1:
+        limit = min(self.T_sim, len(self.traj.inputs), len(self.traj.states) - 1, len(self.traj.V_N) - 1)
+        if limit < 1:
             return AlphaViolationStats()
 
-        states = np.asarray(self.traj.states[:T_limit], dtype=float)
-        inputs = np.asarray(self.traj.inputs[:T_limit], dtype=float)
+        states = np.asarray(self.traj.states[:limit], dtype=float)
+        inputs = np.asarray(self.traj.inputs[:limit], dtype=float)
         
         # Value function sequence: V_k, V_{k+1}
         V = np.asarray(self.traj.V_N, dtype=float)
-        V_curr = V[:T_limit]
-        V_next = V[1:T_limit+1]
+        V_curr = V[:limit]
+        V_next = V[1:limit+1]
 
         l_curr = self.cfg.cost.get_stage_cost(states, inputs)
 
@@ -334,6 +366,12 @@ class StabilityVerifier:
         report : AsymptoticStabilityReport
             A report indicating the empirical alpha and whether the decrease condition is satisfied.
         """
+        if not self.resolve_relaxed_descent(self._ref_entry):
+            return AsymptoticStabilityReport(
+                is_stable=False,
+                message="NOT APPLICABLE: Insufficient data to compute alpha-decay (missing V_N or stage cost).",
+            )
+
         used = 0
         min_alpha = float("inf")
         max_violation = 0.0
@@ -377,13 +415,39 @@ class StabilityVerifier:
 
 
     # --- GRÜNE CONDITION CHECK ---
+    @staticmethod
+    def can_use_gruene(data: MPCData) -> bool:
+        """Check if the trajectory contains enough V_N values and l*(x) estimates to compute gamma estimates for the Grüne condition."""
+        
+        if data.trajectory.V_N is None:
+            __logger__.warning(
+                "Trajectory does not contain enough V_N values to compute Grüne condition.")
+            return False
+        if len(data.trajectory.states) == 0:
+            __logger__.warning(
+                "Trajectory does not contain states required to compute l(x) estimates for the Grüne condition.")
+            return False
+        if not data.config.cost.has_stage_cost():
+            __logger__.warning(
+                "Cost function does not contain Vx and Vu required to compute l(x) estimates for the Grüne condition.")
+            return False
+        if data.config.cost.has_terminal_cost():
+            __logger__.warning(
+                "Cost function contain terminal cost required not to be set for the Grüne condition.")
+            return False
+        if data.config.constraints.has_bx_e():
+            __logger__.warning(
+                "Constraints contain terminal state bounds required not to be set for the Grüne condition.")
+            return False
+        
+        return True
+
     def gamma_estimates(self) -> list[float]:
         """Estimate the maximum gamma value over the dataset."""
         self._require_bound_entry()
-        T_limit = min(self.T_sim, len(self.traj.states), len(self.traj.V_N))
-        
-        states = np.asarray(self.traj.states[:T_limit], dtype=float)
-        V_N = np.asarray(self.traj.V_N[:T_limit], dtype=float)
+        limit = min(self.T_sim, len(self.traj.states), len(self.traj.V_N))
+        states = np.asarray(self.traj.states[:limit], dtype=float)
+        V_N = np.asarray(self.traj.V_N[:limit], dtype=float)
         
         # Finite check
         valid_x = np.all(np.isfinite(states), axis=1)
@@ -417,16 +481,13 @@ class StabilityVerifier:
         report : GrüneHorizonReport
             A report indicating applicability and estimates of gamma, alpha_N, and required horizon.
         """
-        cfg0 = self.dataset[0].config
-        has_terminal_cost = cfg0.cost.has_terminal_cost()
-        has_terminal_bounds = cfg0.constraints.has_bx_e()
-
-        if has_terminal_cost or has_terminal_bounds:
+        if not self.can_use_gruene(self._ref_entry):
             return GrüneHorizonReport(
                 applicability=False,
-                message="NOT APPLICABLE: Dataset includes terminal cost/bounds; no-terminal theorem does not directly apply")
+                message="NOT APPLICABLE: Dataset includes terminal cost/bounds "
+                "or lacks V_N/states/stage cost required to estimate gamma for the Grüne condition.")
 
-        N = int(cfg0.N)
+        N = int(self._ref_entry.config.N)
         max_gamma = 0.0
 
         with __logger__.tqdm(

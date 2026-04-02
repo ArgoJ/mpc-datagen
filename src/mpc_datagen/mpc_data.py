@@ -445,11 +445,18 @@ class LinearLSCost:
         if np.ndim(norm) == 0:
             return scale * float(norm)
         return scale * norm
+    
+    def has_stage_cost(self) -> bool:
+        """Check if stage cost matrices are defined."""
+        return _is_defined_array(self.Vx, not_zero=True) \
+            and _is_defined_array(self.Vu, not_zero=True) \
+            and _is_defined_array(self.W, not_zero=True)
 
     def has_terminal_cost(self) -> bool:
         """Check if terminal cost matrices are defined."""
-        return _is_defined_array(self.Vx_e, not_zero=True) and _is_defined_array(self.W_e, not_zero=True)
-    
+        return _is_defined_array(self.Vx_e, not_zero=True) \
+            and _is_defined_array(self.W_e, not_zero=True)
+
     def get_optimal_stage_cost(self, x: NDArray) -> tuple[float | NDArray, NDArray]:
         r"""Lower bound on $\ell^*(x) := \min_\mathbf{u} \ell(x,\mathbf{u})$ via unconstrained minimization.
         Derives analytical minimum based on the linear residuals. Supports vectorized inputs.
