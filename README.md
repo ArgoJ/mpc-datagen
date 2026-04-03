@@ -95,14 +95,6 @@ from mpc_datagen import solve_mpc_closed_loop
 data = solve_mpc_closed_loop(solver, T_sim=100)
 ```
 
-## Logging
-
-```python
-from mpc_datagenpkg_logger import get_package_logger
-
-PackageLogger.setup()
-```
-
 ## Notes
 
 - The package assumes an acados installation for solver-related features.

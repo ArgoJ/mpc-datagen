@@ -1,6 +1,6 @@
 import json
 import h5py
-import os
+import logging
 import numpy as np
 import pandas as pd
 import casadi as ca
@@ -13,9 +13,8 @@ from pathlib import Path
 
 
 from .linalg import weighted_quadratic_norm
-from pkg_logger import get_package_logger
 
-__logger__ = get_package_logger(__name__)
+__logger__ = logging.getLogger(__name__)
 
 
 # ==== Utility Functions for Config Comparisons ====

@@ -1,12 +1,13 @@
 import numpy as np
+import logging
 
 from abc import ABC, abstractmethod
 from numpy.typing import NDArray
 
 from acados_template import AcadosOcpSolver, AcadosOcpBatchSolver
-from pkg_logger import suppress_native_output, get_package_logger
+from pkg_logger import suppress_native_output
 
-__logger__ = get_package_logger(__name__)
+__logger__ = logging.getLogger(__name__)
 
 
 class SolverAdapter(ABC):

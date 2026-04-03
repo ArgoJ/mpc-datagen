@@ -1,6 +1,7 @@
 import numpy as np
 import os
 import re
+import logging
 import plotly.graph_objects as go
 
 from numpy.typing import NDArray
@@ -10,9 +11,8 @@ from itertools import combinations
 from skimage import measure
 
 from .mpc_data import MPCDataset
-from pkg_logger import get_package_logger
 
-__logger__ = get_package_logger(__name__)
+__logger__ = logging.getLogger(__name__)
 
 
 COLORS = [

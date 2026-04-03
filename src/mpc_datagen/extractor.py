@@ -1,4 +1,5 @@
 import numpy as np
+import logging
 
 from numpy.typing import NDArray
 from typing import Any, Literal
@@ -6,9 +7,8 @@ from acados_template import AcadosOcp, AcadosOcpSolver, AcadosOcpBatchSolver
 
 from .mpc_data import MPCConfig, LinearSystem, LinearLSCost, Constraints
 from .linalg import discretize_and_linearize_rk4
-from pkg_logger import get_package_logger
 
-__logger__ = get_package_logger(__name__)
+__logger__ = logging.getLogger(__name__)
 
 
 # --- Helpers ---

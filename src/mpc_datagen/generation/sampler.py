@@ -1,11 +1,11 @@
 import numpy as np
+import logging
 
 from numpy.typing import NDArray
 from dataclasses import dataclass, field
 
-from pkg_logger import get_package_logger
 
-__logger__ = get_package_logger(__name__)
+__logger__ = logging.getLogger(__name__)
 
 
 @dataclass

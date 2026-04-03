@@ -3,7 +3,9 @@ import shutil
 import tempfile
 import copy
 import numpy as np
+import logging
 
+from rich.progress import Progress, TextColumn, BarColumn, TimeElapsedColumn, TimeRemainingColumn
 from datetime import datetime, timezone
 from numpy.typing import NDArray
 from acados_template import AcadosOcpSolver, AcadosOcp, AcadosOcpBatchSolver
@@ -11,12 +13,11 @@ from dataclasses import replace, dataclass
 
 from .sampler import SamplerBase
 from .solver_adapter import SolverAdapter, AcadosBatchSolverAdapter, AcadosSolverAdapter
-from ..extractor import get_primary_solver, resolve_solver, extract_cfg, is_batch_solver
+from ..extractor import resolve_solver, extract_cfg
 from ..mpc_data import MPCDataset, MPCConfig, MPCData, MPCMeta, MPCTrajectory
-from pkg_logger import get_package_logger, suppress_native_output
+from pkg_logger import suppress_native_output
 
-__logger__ = get_package_logger(__name__)
-
+__logger__ = logging.getLogger(__name__)
 
 def create_solver_adapter(solver: AcadosOcpSolver | AcadosOcpBatchSolver) -> SolverAdapter:
     if isinstance(solver, AcadosOcpBatchSolver):
@@ -310,7 +311,14 @@ class MPCDataGenerator:
         x0_init = self.sampler.sample_x0(n_active)
         current_x[:] = self._get_x_guess(x0_init)
 
-        with __logger__.tqdm(total=n_samples, desc="Generating Trajectories") as pbar:
+        with Progress(
+            TextColumn("[bold]{task.description}"),
+            BarColumn(),
+            TextColumn("feasible: {task.fields[feasible]:3.1f}%"),
+            TimeElapsedColumn(),
+            TimeRemainingColumn(),
+        ) as progress:
+            task = progress.add_task("Generating Trajectories", total=n_samples, feasible=0.0)
             while self.generated_count < n_samples:
 
                 # --- Solve OCP ---
@@ -383,7 +391,7 @@ class MPCDataGenerator:
 
                         if n_kept > 0:
                             self.generated_count += n_kept
-                            pbar.update(n_kept)
+                            progress.update(task, advance=n_kept, feasible=self.feasibility_percentage)
 
                         kept_slots = valid_slots[keep_mask]
                         rejected_data_idxs = valid_data_idxs[~keep_mask]
@@ -408,8 +416,6 @@ class MPCDataGenerator:
                     current_x[done_slots, :] = self._get_x_guess(new_x0)
                     current_u[done_slots, :] = 0
                     eps_hits[done_slots] = 0
-
-                pbar.set_postfix_str(f"feasible: {self.feasibility_percentage:.1f}%")
 
         __logger__.info("Finalizing dataset...")
         dataset.finalize(recalculate_costs=True, truncate=True)

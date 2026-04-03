@@ -1,14 +1,14 @@
 import numpy as np
 import scipy.linalg as sla
+import logging
 
 from numpy.typing import NDArray
 
 from ..mpc_data import MPCConfig
-from pkg_logger import get_package_logger
 from ..extractor import extract_QR
 from ..linalg import sym
 
-__logger__ = get_package_logger(__name__)
+__logger__ = logging.getLogger(__name__)
 
 class ROAVerifier:
     def __init__(self, cfg: MPCConfig):

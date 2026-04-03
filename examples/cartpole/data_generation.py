@@ -23,9 +23,8 @@ from mpc_datagen.verification import (
 )
 
 from acados_ocp import get_batch_ocp_solver, get_ocp_solver
-from pkg_logger import get_package_logger
 
-__logger__ = get_package_logger("mpc_datagen")
+__logger__ = logging.getLogger("mpc_datagen")
 
 def _setup_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(

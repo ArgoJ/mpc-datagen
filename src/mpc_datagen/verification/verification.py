@@ -1,15 +1,16 @@
 import numpy as np
+import logging
 
 from numpy.typing import NDArray
 from collections.abc import Generator
+from rich.progress import Progress, TextColumn, BarColumn, TimeElapsedColumn, TimeRemainingColumn
 
 from .reports import *
 from .gruene import grune_required_horizon_and_alpha
 from ..mpc_data import MPCData, MPCDataset, MPCConfig, MPCMeta, MPCTrajectory
-from pkg_logger import get_package_logger
 
 
-__logger__ = get_package_logger(__name__)
+__logger__ = logging.getLogger(__name__)
     
 
 class StabilityVerifier:
@@ -235,12 +236,15 @@ class StabilityVerifier:
         violation_count = 0
         total_steps = 0
         
-        with  __logger__.tqdm(
-            self,
-            desc="Lyapunov descent check",
-            unit="trajectory",
-        ) as pbar:
-            for _ in pbar:
+        with Progress(
+            TextColumn("[bold]{task.description}"),
+            BarColumn(),
+            TextColumn("n_viol: {task.fields[n_viol]:d}"),
+            TimeElapsedColumn(),
+            TimeRemainingColumn(),
+        ) as progress:
+            task = progress.add_task("Lyapunov descent check", total=len(self), n_viol=0)
+            for _ in self:
                 diffs = self.lyapunov_descent()
                 total_steps += len(diffs)
                 
@@ -252,7 +256,7 @@ class StabilityVerifier:
                 if n_violations > 0:
                     violation_count += n_violations
                     max_increase = max(max_increase, float(np.max(diffs[violation_mask])))
-                    pbar.set_postfix_str(f"n_viol.: {violation_count}")
+                progress.update(task, advance=1, n_viol=violation_count)
         
         is_stable = (violation_count == 0)
 
@@ -376,12 +380,15 @@ class StabilityVerifier:
         min_alpha = float("inf")
         max_violation = 0.0
 
-        with __logger__.tqdm(
-            self,
-            desc="Asymptotic stability check",
-            unit="trajectory",
-        ) as pbar:
-            for _ in pbar:
+        with Progress(
+            TextColumn("[bold]{task.description}"),
+            BarColumn(),
+            TextColumn("α: {task.fields[alpha]:.3f}"),
+            TimeElapsedColumn(),
+            TimeRemainingColumn(),
+        ) as progress:
+            task = progress.add_task("Asymptotic stability check", total=len(self), alpha=1.0)
+            for _ in self:
                 stats = self.alpha_and_max_violation(alpha_required=alpha_required)
                 if stats.n_used == 0:
                     continue
@@ -389,10 +396,9 @@ class StabilityVerifier:
                 used += 1
                 if np.isfinite(stats.min_alpha) and stats.min_alpha < min_alpha:
                     min_alpha = float(stats.min_alpha)
-                    pbar.set_postfix_str(f"α: {min_alpha:.3f}")
                 if np.isfinite(stats.max_violation) and stats.max_violation > max_violation:
                     max_violation = float(stats.max_violation)
-
+                progress.update(task, advance=1, alpha=min_alpha)
 
         if used == 0:
             min_alpha = 0.0
@@ -490,12 +496,15 @@ class StabilityVerifier:
         N = int(self._ref_entry.config.N)
         max_gamma = 0.0
 
-        with __logger__.tqdm(
-            self,
-            desc="Estimating Grüne gamma values",
-            unit="trajectory",
-        ) as pbar:
-            for _ in pbar:
+        with Progress(
+            TextColumn("[bold]{task.description}"),
+            BarColumn(),
+            TextColumn("γ: {task.fields[gamma]:.3f}"),
+            TimeElapsedColumn(),
+            TimeRemainingColumn(),
+        ) as progress:
+            task = progress.add_task("Estimating Grüne gamma", total=len(self), gamma=0.0)
+            for _ in self:
                 gamma_list = self.gamma_estimates()
                 if not gamma_list:
                     continue
@@ -503,7 +512,7 @@ class StabilityVerifier:
                 gamma = float(np.max(gamma_list))
                 if gamma > max_gamma:
                     max_gamma = gamma
-                    pbar.set_postfix_str(f"γ: {max_gamma:.3f}")
+                progress.update(task, advance=1, gamma=max_gamma)
         
         if max_gamma == 0.0:
             return GrüneHorizonReport(
