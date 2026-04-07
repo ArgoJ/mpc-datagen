@@ -803,7 +803,7 @@ def lyapunov(
         State indices to consider. If None, all states are used and all pairwise
         combinations are plotted.
     state_labels : list[str], optional
-        Labels for the plotted state dimensions. Defaults to ["State i", "State j"].
+        All Labels for the plotted state dimensions. Defaults to ["State i", ...].
     limits : list of tuples, optional
         ((min_x, max_x), (min_y, max_y)). If None, inferred from data with padding.
     resolution : int, optional
@@ -825,7 +825,9 @@ def lyapunov(
             raise ValueError(
                 "Without dataset, state_indices must be provided to infer state dimension."
             )
-        num_states = int(max(state_indices) + 1)
+        num_states = int(
+            max(max(state_indices) + 1, len(state_labels) if state_labels is not None else 0)
+        )
 
     state_indices = _resolve_indices(state_indices, num_states)
     labels_full = _resolve_labels(state_labels, num_states)
