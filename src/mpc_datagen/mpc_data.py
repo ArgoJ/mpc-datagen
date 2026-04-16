@@ -62,6 +62,90 @@ def _to_json_compatible(value: Any) -> Any:
     return value
 
 
+def _dataclass_to_dict(instance: Any) -> dict[str, Any]:
+    """Serialize a dataclass instance to a plain Python dictionary.
+
+    Parameters
+    ----------
+    instance : Any
+        Dataclass instance to serialize.
+    """
+    if not hasattr(instance, "__dataclass_fields__"):
+        raise TypeError(f"Expected dataclass instance, got {type(instance).__name__}.")
+
+    field_names = list(instance.__dataclass_fields__.keys())
+
+    out: dict[str, Any] = {}
+    for name in field_names:
+        value = getattr(instance, name)
+        if hasattr(value, "to_dict") and callable(value.to_dict):
+            out[name] = value.to_dict()
+        else:
+            out[name] = _to_json_compatible(value)
+    return out
+
+
+def _dataclass_from_dict(
+    dataclass_type: type,
+    data: dict[str, Any]
+) -> Any:
+    """Create a dataclass instance from a plain Python dictionary.
+
+    Parameters
+    ----------
+    dataclass_type : type
+        Dataclass type to construct.
+    data : dict[str, Any]
+        Source dictionary.
+    """
+    if not isinstance(data, dict):
+        raise TypeError(f"Expected 'data' to be dict, got {type(data).__name__}.")
+
+    if not hasattr(dataclass_type, "__dataclass_fields__"):
+        raise TypeError(f"Expected dataclass type, got {dataclass_type}.")
+
+    defaults = dataclass_type()
+    field_names = list(dataclass_type.__dataclass_fields__.keys())
+
+    values: dict[str, Any] = {}
+    for name in field_names:
+        default = getattr(defaults, name)
+        raw_value = data.get(name, default)
+
+        if raw_value is None:
+            values[name] = default
+            continue
+
+        # Recurse into nested dataclasses if they expose from_dict.
+        if hasattr(default, "from_dict") and callable(default.from_dict):
+            if isinstance(raw_value, dict):
+                values[name] = default.from_dict(raw_value)
+            else:
+                values[name] = raw_value
+            continue
+
+        # Treat NumPy-backed fields consistently.
+        if isinstance(default, np.ndarray):
+            values[name] = np.asarray(raw_value).copy()
+            continue
+
+        # Cast scalar fields according to their default type.
+        if isinstance(default, (bool, np.bool_)):
+            values[name] = bool(raw_value)
+            continue
+        if isinstance(default, (int, np.integer)) and not isinstance(default, bool):
+            values[name] = int(raw_value)
+            continue
+        if isinstance(default, (float, np.floating)):
+            values[name] = float(raw_value)
+            continue
+
+        # Fall back to raw value for generic containers/objects.
+        values[name] = raw_value
+
+    return dataclass_type(**values)
+
+
 # ==== Base Data and Dataset Classes ====
 TData = TypeVar("TData", bound="BaseData")
 TDataset = TypeVar("TDataset", bound="BaseDataset[Any]")
@@ -322,6 +406,18 @@ class LinearSystem:
     B: NDArray = field(default_factory=lambda: np.array([[]]))
     gd: NDArray = field(default_factory=lambda: np.array([[]]))
 
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize the linear system to a plain Python dictionary."""
+        return _dataclass_to_dict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "LinearSystem":
+        """Create a ``LinearSystem`` instance from a dictionary."""
+        return cast(
+            LinearSystem,
+            _dataclass_from_dict(cls, data)
+        )
+
     @classmethod
     def from_hdf5(cls, grp: h5py.Group, overwrite_grp: h5py.Group | None = None) -> "LinearSystem":
         """Load linear system matrices from a trajectory group (expects a `linear_system` subgroup)."""
@@ -406,6 +502,18 @@ class LinearLSCost:
     yref_e: NDArray = field(default_factory=lambda: np.array([[]]))
     stage_scale: float = 1.0
     terminal_scale: float = 1.0
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize the linear least-squares cost to a plain Python dictionary."""
+        return _dataclass_to_dict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "LinearLSCost":
+        """Create a ``LinearLSCost`` instance from a dictionary."""
+        return cast(
+            LinearLSCost,
+            _dataclass_from_dict(cls, data)
+        )
 
     def get_y(self, x: NDArray, u: NDArray) -> NDArray:
         """Compute the stage output y = Vx x + Vu u."""
@@ -779,6 +887,18 @@ class Constraints:
     lbx_e: NDArray = field(default_factory=lambda: np.array([]))
     ubx_e: NDArray = field(default_factory=lambda: np.array([]))
 
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize constraints to a plain Python dictionary."""
+        return _dataclass_to_dict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Constraints":
+        """Create a ``Constraints`` instance from a dictionary."""
+        return cast(
+            Constraints,
+            _dataclass_from_dict(cls, data)
+        )
+
     def has_bx(self) -> bool:
         """Check if state bounds are defined."""
         return _is_defined_array(self.lbx) and _is_defined_array(self.ubx)
@@ -903,78 +1023,14 @@ class MPCConfig:
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the configuration to a plain Python dictionary."""
-        def _to_plain(value: Any) -> Any:
-            if isinstance(value, np.ndarray):
-                return value.tolist()
-            if isinstance(value, dict):
-                return {k: _to_plain(v) for k, v in value.items()}
-            if isinstance(value, list):
-                return [_to_plain(v) for v in value]
-            return value
-
-        return cast(dict[str, Any], _to_plain(asdict(self)))
+        return _dataclass_to_dict(self)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "MPCConfig":
         """Create an ``MPCConfig`` instance from a dictionary."""
-        if not isinstance(data, dict):
-            raise TypeError(f"Expected 'data' to be dict, got {type(data).__name__}.")
-
-        def _as_subdict(value: Any, name: str) -> dict[str, Any]:
-            if value is None:
-                return {}
-            if not isinstance(value, dict):
-                raise TypeError(f"Expected '{name}' to be dict, got {type(value).__name__}.")
-            return value
-
-        def _coerce_array_dataclass(
-            dataclass_type: type[Constraints] | type[LinearSystem],
-            values: dict[str, Any],
-            defaults_obj: Constraints | LinearSystem,
-        ) -> Constraints | LinearSystem:
-            converted: dict[str, NDArray] = {}
-            for name in dataclass_type.__dataclass_fields__.keys():
-                value = values.get(name, getattr(defaults_obj, name))
-                if value is None:
-                    value = getattr(defaults_obj, name)
-                converted[name] = np.asarray(value).copy()
-            return dataclass_type(**converted)
-
-        defaults = cls()
-        constraints_data = _as_subdict(data.get("constraints", {}), "constraints")
-        model_data = _as_subdict(data.get("model", {}), "model")
-        cost_data = _as_subdict(data.get("cost", {}), "cost")
-        cost_array_fields = [
-            name
-            for name in LinearLSCost.__dataclass_fields__.keys()
-            if name not in {"stage_scale", "terminal_scale"}
-        ]
-        cost_arrays: dict[str, NDArray] = {}
-        for name in cost_array_fields:
-            value = cost_data.get(name, getattr(defaults.cost, name))
-            if value is None:
-                value = getattr(defaults.cost, name)
-            cost_arrays[name] = np.asarray(value).copy()
-
-        return cls(
-            T_sim=int(data.get("T_sim", defaults.T_sim)),
-            N=int(data.get("N", defaults.N)),
-            nx=int(data.get("nx", defaults.nx)),
-            nu=int(data.get("nu", defaults.nu)),
-            dt=float(data.get("dt", defaults.dt)),
-            constraints=cast(
-                Constraints,
-                _coerce_array_dataclass(Constraints, constraints_data, defaults.constraints),
-            ),
-            model=cast(
-                LinearSystem,
-                _coerce_array_dataclass(LinearSystem, model_data, defaults.model),
-            ),
-            cost=LinearLSCost(
-                **cost_arrays,
-                stage_scale=float(cost_data.get("stage_scale", defaults.cost.stage_scale)),
-                terminal_scale=float(cost_data.get("terminal_scale", defaults.cost.terminal_scale)),
-            ),
+        return cast(
+            MPCConfig,
+            _dataclass_from_dict(cls, data)
         )
 
     @staticmethod
@@ -1092,6 +1148,15 @@ class MPCConfig:
         self.constraints.to_hdf5(cfg_grp, exclude_fields=exclude_constraints)
         self.model.to_hdf5(cfg_grp, exclude_fields=exclude_model)
         self.cost.to_hdf5(cfg_grp, exclude_fields=exclude_cost)
+    
+    def to_json(self) -> str:
+        """Serialize the configuration to a JSON string."""
+        return json.dumps(self.to_dict(), indent=4)
+    
+    def from_json(self, json_str: str) -> "MPCConfig":
+        """Create an MPCConfig instance from a JSON string."""
+        data = json.loads(json_str)
+        return self.from_dict(data)
 
 
 @dataclass
