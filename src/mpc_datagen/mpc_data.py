@@ -1148,15 +1148,6 @@ class MPCConfig:
         self.constraints.to_hdf5(cfg_grp, exclude_fields=exclude_constraints)
         self.model.to_hdf5(cfg_grp, exclude_fields=exclude_model)
         self.cost.to_hdf5(cfg_grp, exclude_fields=exclude_cost)
-    
-    def to_json(self) -> str:
-        """Serialize the configuration to a JSON string."""
-        return json.dumps(self.to_dict(), indent=4)
-    
-    def from_json(self, json_str: str) -> "MPCConfig":
-        """Create an MPCConfig instance from a JSON string."""
-        data = json.loads(json_str)
-        return self.from_dict(data)
 
 
 @dataclass
