@@ -5,7 +5,14 @@ import copy
 import numpy as np
 import logging
 
-from rich.progress import Progress, TextColumn, BarColumn, TimeElapsedColumn, TimeRemainingColumn
+from rich.progress import (
+    Progress,
+    TextColumn,
+    BarColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+    MofNCompleteColumn,
+)
 from datetime import datetime, timezone
 from numpy.typing import NDArray
 from acados_template import AcadosOcpSolver, AcadosOcp, AcadosOcpBatchSolver
@@ -314,6 +321,7 @@ class MPCDataGenerator:
         with Progress(
             TextColumn("[bold]{task.description}"),
             BarColumn(),
+            MofNCompleteColumn(),
             TextColumn("feasible: {task.fields[feasible]:3.1f}%"),
             TimeElapsedColumn(),
             TimeRemainingColumn(),
