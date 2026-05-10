@@ -304,14 +304,13 @@ def _add_trajectory_traces(
         y = traj.states[:-1, idx_y].reshape(-1)
 
         if plot_3d:
-            if use_dataset_v and traj.V_N is not None and traj.V_N.size > 0:
-                v_traj = np.asarray(traj.V_N, dtype=float).reshape(-1)
-            else:
-                v_traj = _evaluate_lyapunov(lyapunov_func, traj.states)
+            v_traj = traj.V_N \
+                if use_dataset_v and traj.V_N is not None and traj.V_N.size > 0 \
+                else _evaluate_lyapunov(lyapunov_func, traj.states)
 
-            if v_traj.shape != x.shape:
-                __logger__.debug(
-                    f"Trajectory {idx+1} cost shape {v_traj.shape} does not match state shape {x.shape}; skipping."
+            if v_traj is None or v_traj.shape != x.shape:
+                __logger__.warning(
+                    f"Trajectory {idx+1} cost shape {None if v_traj is None else v_traj.shape} does not match state shape {x.shape}; skipping."
                 )
                 continue
 
@@ -960,7 +959,7 @@ def relaxed_dp_residual(
         id = entry.meta.id
 
         if traj.V_N is None:
-            __logger__.debug(f"Entry {id} missing V_N; skipping.")
+            __logger__.info(f"Entry {id} missing V_N; skipping.")
             continue
 
         # Ensure consistent lengths across V_N, states, and inputs.
@@ -970,7 +969,7 @@ def relaxed_dp_residual(
             int(traj.states.shape[0] - 1),
         )
         if num_steps <= 0:
-            __logger__.debug(f"Entry {id} has insufficient steps; skipping.")
+            __logger__.info(f"Entry {id} has insufficient steps; skipping.")
             continue
 
         x = traj.states[:num_steps]
@@ -1077,7 +1076,7 @@ def cost_descent(
 
         V = V_getter(traj)
         if V is None:
-            __logger__.debug(f"Entry {id} missing {'V_N' if use_optimal_v else 'V_preds'}; skipping.")
+            __logger__.info(f"Entry {id} missing {'V_N' if use_optimal_v else 'V_preds'}; skipping.")
             continue
 
         V_arr = np.asarray(V, dtype=float)
