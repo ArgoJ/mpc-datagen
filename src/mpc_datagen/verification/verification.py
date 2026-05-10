@@ -3,7 +3,14 @@ import logging
 
 from numpy.typing import NDArray
 from collections.abc import Generator
-from rich.progress import Progress, TextColumn, BarColumn, TimeElapsedColumn, TimeRemainingColumn
+from rich.progress import (
+    Progress,
+    TextColumn,
+    BarColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+    TaskProgressColumn,
+)
 
 from .reports import *
 from .gruene import grune_required_horizon_and_alpha
@@ -239,9 +246,9 @@ class StabilityVerifier:
         with Progress(
             TextColumn("[bold]{task.description}"),
             BarColumn(),
+            TaskProgressColumn(),
             TextColumn("n_viol: {task.fields[n_viol]:d}"),
             TimeElapsedColumn(),
-            TimeRemainingColumn(),
         ) as progress:
             task = progress.add_task("Lyapunov descent check", total=len(self), n_viol=0)
             for _ in self:
@@ -383,9 +390,9 @@ class StabilityVerifier:
         with Progress(
             TextColumn("[bold]{task.description}"),
             BarColumn(),
+            TaskProgressColumn(),
             TextColumn("α: {task.fields[alpha]:.3f}"),
             TimeElapsedColumn(),
-            TimeRemainingColumn(),
         ) as progress:
             task = progress.add_task("Asymptotic stability check", total=len(self), alpha=1.0)
             for _ in self:
@@ -499,9 +506,9 @@ class StabilityVerifier:
         with Progress(
             TextColumn("[bold]{task.description}"),
             BarColumn(),
+            TaskProgressColumn(),
             TextColumn("γ: {task.fields[gamma]:.3f}"),
             TimeElapsedColumn(),
-            TimeRemainingColumn(),
         ) as progress:
             task = progress.add_task("Estimating Grüne gamma", total=len(self), gamma=0.0)
             for _ in self:
