@@ -300,13 +300,14 @@ def _add_trajectory_traces(
         traj = entry.trajectory
         color = COLORS[idx % len(COLORS)]
 
-        x = traj.states[:-1, idx_x].reshape(-1)
-        y = traj.states[:-1, idx_y].reshape(-1)
+        states = np.asarray(traj.states[:-1], dtype=float)
+        x = states[:, idx_x].reshape(-1)
+        y = states[:, idx_y].reshape(-1)
 
         if plot_3d:
             v_traj = traj.V_N \
                 if use_dataset_v and traj.V_N is not None and traj.V_N.size > 0 \
-                else _evaluate_lyapunov(lyapunov_func, traj.states)
+                else _evaluate_lyapunov(lyapunov_func, states)
 
             if v_traj is None or v_traj.shape != x.shape:
                 __logger__.warning(
