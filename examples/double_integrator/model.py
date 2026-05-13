@@ -263,7 +263,6 @@ if __name__ == "__main__":
         else:
             lyap_fun = None
             roa_lyap_fun = None
-            roa_bounds = None
             c_min = None
 
         mdg_plots.all(
@@ -279,7 +278,6 @@ if __name__ == "__main__":
             lyap_use_optimal_v=True,
             roa_lyapunov_func=roa_lyap_fun,
             c_level=c_min,
-            roa_bounds=roa_bounds,
             base_path=f"plots/double_integrator_{terminal_mode}_N{N}",
         )
 

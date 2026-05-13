@@ -105,14 +105,33 @@ def _to_latex(label: str) -> str:
     return raw
 
 
-def _resolve_bounds(bounds: NDArray) -> NDArray:
-    """Validate and normalize state bounds array."""
-    bounds_arr = np.asarray(bounds, dtype=float)
-    if bounds_arr.ndim != 2:
-        raise ValueError("bounds must be a 2D array with shape (n_points, nx).")
-    if int(bounds_arr.shape[1]) < 2:
-        raise ValueError("bounds must contain at least 2 state dimensions.")
-    return bounds_arr
+def _resolve_num_states(
+    nx: int | None,
+    state_indices: list[int] | None,
+    state_labels: list[str] | None,
+) -> int:
+    """Resolve state dimension for plots without dataset context."""
+    inferred = 0
+    if state_indices:
+        inferred = max(inferred, max(state_indices) + 1)
+    if state_labels is not None:
+        inferred = max(inferred, len(state_labels))
+
+    if nx is None:
+        if inferred < 2:
+            raise ValueError(
+                "nx must be provided when it cannot be inferred from state_indices or state_labels."
+            )
+        nx = inferred
+
+    num_states = int(nx)
+    if num_states < 2:
+        raise ValueError("nx must be at least 2.")
+    if inferred > num_states:
+        raise ValueError(
+            f"nx ({num_states}) is smaller than the dimension implied by state_indices/state_labels ({inferred})."
+        )
+    return num_states
 
 
 def _resolve_labels(state_labels: list[str] | None, num_states: int) -> list[str]:
@@ -139,11 +158,11 @@ def _resolve_indices(state_indices: list[int] | None, num_states: int) -> list[i
 def _resolve_limits(
     limits: list[tuple[float, float]] | None,
 ) -> list[tuple[float, float]] | None:
-    """Validate user-provided 2D limits and normalize to float tuples."""
+    """Validate user-provided axis limits and normalize to float tuples."""
     if limits is None:
         return None
-    if len(limits) != 2:
-        raise ValueError("limits must contain exactly two axis bounds tuples.")
+    if len(limits) < 2:
+        raise ValueError("limits must contain at least two axis bounds tuples.")
 
     resolved: list[tuple[float, float]] = []
     for i, lim in enumerate(limits):
@@ -155,6 +174,24 @@ def _resolve_limits(
             raise ValueError(f"limits[{i}] must satisfy min < max, got ({lo}, {hi}).")
         resolved.append((lo, hi))
     return resolved
+
+
+def _pair_limits_from_resolved(
+    limits: list[tuple[float, float]] | None,
+    idx_x: int,
+    idx_y: int,
+    num_states: int,
+) -> list[tuple[float, float]] | None:
+    """Select pair-specific limits from 2D or full-state limits."""
+    if limits is None:
+        return None
+    if len(limits) == 2:
+        return limits
+    if len(limits) == num_states:
+        return [limits[idx_x], limits[idx_y]]
+    raise ValueError(
+        "limits must contain either exactly two tuples or one tuple per state dimension."
+    )
 
 
 def _infer_pair_limits(
@@ -182,6 +219,32 @@ def _infer_pair_limits(
         (x_min - pad_x, x_max + pad_x),
         (y_min - pad_y, y_max + pad_y),
     ]
+
+
+def _infer_state_limits(
+    states: NDArray,
+    *,
+    pad_ratio: float = 0.1,
+    min_pad: float = 1e-12,
+) -> list[tuple[float, float]]:
+    """Infer padded plotting limits for every state dimension."""
+    states_arr = np.asarray(states, dtype=float)
+    if states_arr.ndim != 2:
+        raise ValueError("states must be a 2D array with shape (n_points, nx).")
+    if int(states_arr.shape[0]) == 0:
+        raise ValueError("Cannot infer limits from an empty states array.")
+    if int(states_arr.shape[1]) < 2:
+        raise ValueError("states must contain at least 2 state dimensions.")
+
+    limits: list[tuple[float, float]] = []
+    for idx in range(int(states_arr.shape[1])):
+        values = states_arr[:, idx].reshape(-1)
+        value_min = float(np.min(values))
+        value_max = float(np.max(values))
+        pad = pad_ratio * max(min_pad, value_max - value_min)
+        limits.append((value_min - pad, value_max + pad))
+
+    return limits
 
 def _state_index_pairs(state_indices: list[int]) -> list[tuple[int, int]]:
     if len(state_indices) < 2:
@@ -805,7 +868,8 @@ def lyapunov(
     state_labels : list[str], optional
         All Labels for the plotted state dimensions. Defaults to ["State i", ...].
     limits : list of tuples, optional
-        ((min_x, max_x), (min_y, max_y)). If None, inferred from data with padding.
+        Either `[(min_x, max_x), (min_y, max_y)]` for all pairs or one tuple per
+        state dimension. If None, inferred from data with padding.
     resolution : int, optional
         Grid resolution for the Lyapunov function contour plot.
     plot_3d : bool, optional
@@ -838,8 +902,9 @@ def lyapunov(
 
     for idx_x, idx_y in pairs:
         pair_labels = [labels_full[idx_x], labels_full[idx_y]]
+        pair_limits = _pair_limits_from_resolved(limits, idx_x, idx_y, num_states)
 
-        if limits is None:
+        if pair_limits is None:
             if has_dataset:
                 all_states = np.vstack([d.trajectory.states for d in dataset])
                 pair_limits = _infer_pair_limits(
@@ -853,8 +918,6 @@ def lyapunov(
                     "Could not infer limits without dataset. Falling back to [-1, 1]^2."
                 )
                 pair_limits = [(-1.0, 1.0), (-1.0, 1.0)]
-        else:
-            pair_limits = limits
 
         x_range, y_range, X, _, grid_points = _make_pair_grid(
             pair_limits, resolution, num_states, idx_x, idx_y
@@ -1160,63 +1223,59 @@ def cost_descent(
 def roa(
     lyapunov_func: Callable[[NDArray], NDArray],
     c_level: float,
-    bounds: NDArray,  # shape (n_points, nx)
     state_indices: list[int] | None = None,
+    nx: int | None = None,
     state_labels: list[str] | None = None,
     limits: list[tuple[float, float]] | None = None,
     resolution: int = 100,
     plot_3d: bool = False,
     html_path: str | None = None
 ) -> dict[tuple[int, int], go.Figure] | go.Figure | None:
-    """_summary_
+    """Plot region-of-attraction contours for all selected 2D state pairs.
 
     Parameters
     ----------
     lyapunov_func : Callable[[NDArray], NDArray]
-        _description_
+        Function that evaluates the Lyapunov candidate on a batch of states.
     c_level : float
-        _description_
-    bounds : NDArray
-        _description_
+        Level set value defining the ROA boundary via $V(x) = c$.
+    state_indices : list[int] | None, optional
+        State dimensions to combine pairwise. Defaults to all states.
+    nx : int | None, optional
+        Total state dimension. Required if it cannot be inferred from
+        `state_indices` or `state_labels`.
     state_labels : list[str] | None, optional
-        _description_, by default None
+        Labels for all state dimensions.
     limits : list[tuple[float, float]] | None, optional
-        _description_, by default None
+        Either `[(x_min, x_max), (y_min, y_max)]` for all pairs or one tuple per
+        state dimension.
     resolution : int, optional
-        _description_, by default 100
+        Grid resolution per axis.
     plot_3d : bool, optional
-        _description_, by default False
+        If True, render the Lyapunov landscape as a surface with the ROA level set.
     html_path : str | None, optional
-        _description_, by default None
+        If provided, save the figure(s) to HTML instead of returning them.
 
     Returns
     -------
     dict[tuple[int, int], go.Figure] | go.Figure | None
-        _description_
+        One figure, a dict of figures for multiple pairs, or `None` when saved.
     """
-    bounds_arr = _resolve_bounds(bounds)
-    nx = int(bounds_arr.shape[1])
+    nx = _resolve_num_states(nx, state_indices, state_labels)
 
     state_indices = _resolve_indices(state_indices, nx)
     labels_full = _resolve_labels(state_labels, nx)
-
     limits = _resolve_limits(limits)
+
+    if limits is None:
+        raise ValueError("limits must be provided for roa plots.")
 
     pairs = _state_index_pairs(state_indices)
     figs: dict[tuple[int, int], go.Figure] = {}
 
     for idx_x, idx_y in pairs:
         pair_labels = [labels_full[idx_x], labels_full[idx_y]]
-
-        if limits is None:
-            pair_limits = _infer_pair_limits(
-                bounds_arr[:, idx_x],
-                bounds_arr[:, idx_y],
-                pad_ratio=0.1,
-                min_pad=1e-12,
-            )
-        else:
-            pair_limits = limits
+        pair_limits = _pair_limits_from_resolved(limits, idx_x, idx_y, nx)
 
         x_vec, y_vec, X, _, full_points = _make_pair_grid(
             pair_limits, resolution, nx, idx_x, idx_y
@@ -1268,9 +1327,13 @@ def all(
     state_labels: list[str] | None = None,
     control_labels: list[str] | None = None,
     limits: list[tuple[float, float]] | None = None,
+    lyapunov_limits: list[tuple[float, float]] | None = None,
+    roa_limits: list[tuple[float, float]] | None = None,
     base_path: str | None = None,
     resolution: int = 100,
     plot_3d: bool = False,
+    limit_pad_ratio: float = 0.1,
+    limit_min_pad: float = 1e-12,
 
     # trajectory specific
     time_bound: float | None = None,
@@ -1290,10 +1353,34 @@ def all(
     # roa specific
     roa_lyapunov_func: Callable[[NDArray], NDArray] = None,
     c_level: float = None,
-    roa_bounds: NDArray = None,
+    roa_nx: int | None = None,
 ) -> None:
-    """Convenience function to plot trajectories, residuals, Lyapunov, and ROA together."""
+    """Convenience function to plot trajectories, residuals, Lyapunov, and ROA together.
+
+    `limits` is kept as a shared fallback. Prefer `lyapunov_limits` and
+    `roa_limits` to control both plots independently. When neither is provided,
+    padded limits are inferred from the dataset states.
+    """
     lyap_state_labels = state_labels
+    all_states = np.vstack([entry.trajectory.states for entry in dataset]) if len(dataset) > 0 else None
+    auto_limits = None
+    if all_states is not None:
+        auto_limits = _infer_state_limits(
+            all_states,
+            pad_ratio=limit_pad_ratio,
+            min_pad=limit_min_pad,
+        )
+
+    lyapunov_plot_limits = (
+        lyapunov_limits
+        if lyapunov_limits is not None
+        else limits if limits is not None else auto_limits
+    )
+    roa_plot_limits = (
+        roa_limits
+        if roa_limits is not None
+        else limits if limits is not None else auto_limits
+    )
 
     mpc_trajectories(
         dataset=dataset,
@@ -1320,7 +1407,7 @@ def all(
         lyapunov_func=lyapunov_func,
         state_indices=lyap_state_indices,
         state_labels=lyap_state_labels,
-        limits=limits,
+        limits=lyapunov_plot_limits,
         resolution=resolution,
         plot_3d=plot_3d,
         html_path=lyapunov_path,
@@ -1331,14 +1418,17 @@ def all(
         __logger__.warning("ROA Lyapunov function is required for plotting the region of attraction.")
         return 
 
+    if roa_nx is None and len(dataset) > 0:
+        roa_nx = int(dataset[0].trajectory.states.shape[1])
+
     roa_path = f"{base_path}_roa.html" if base_path else None
     roa(
         lyapunov_func=roa_lyapunov_func,
         c_level=c_level,
-        bounds=roa_bounds,
         state_indices=lyap_state_indices,
+        nx=roa_nx,
         state_labels=state_labels,
-        limits=limits,
+        limits=roa_plot_limits,
         resolution=resolution,
         plot_3d=plot_3d,
         html_path=roa_path

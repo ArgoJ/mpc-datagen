@@ -148,7 +148,6 @@ def main():
         lyap_use_dataset_v=True,
         roa_lyapunov_func=roa_lyap_fun,
         c_level=c_min,
-        roa_bounds=roa_bounds,
         base_path=f"{base_path}/inverted_pendulum_on_cart_N{N}_plots",
     )
 
