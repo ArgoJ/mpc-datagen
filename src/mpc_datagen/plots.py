@@ -246,6 +246,107 @@ def _infer_state_limits(
 
     return limits
 
+
+def _find_level_ray_intersection(
+    lyapunov_func: Callable[[NDArray], NDArray],
+    c_level: float,
+    direction: NDArray,
+    *,
+    base_value: float | None = None,
+    initial_radius: float = 1.0,
+    growth_factor: float = 2.0,
+    max_radius: float = 1e6,
+    max_bisection_steps: int = 60,
+) -> float:
+    """Approximate where the level set ``V(x)=c`` intersects a ray from the origin."""
+    direction_vec = np.asarray(direction, dtype=float).reshape(-1)
+    norm = float(np.linalg.norm(direction_vec))
+    if norm <= 0.0:
+        raise ValueError("direction must be non-zero.")
+    direction_vec = direction_vec / norm
+
+    if base_value is None:
+        base_point = np.zeros((1, direction_vec.size), dtype=float)
+        base_value = float(_evaluate_lyapunov(lyapunov_func, base_point)[0])
+
+    if base_value > c_level:
+        raise ValueError(
+            f"Cannot infer ROA limits from c_level={c_level:.6g} because V(0)={base_value:.6g} > c_level."
+        )
+    if base_value == c_level:
+        return 0.0
+
+    low = 0.0
+    high = float(initial_radius)
+    point = np.zeros((1, direction_vec.size), dtype=float)
+
+    while True:
+        point[0, :] = high * direction_vec
+        high_value = float(_evaluate_lyapunov(lyapunov_func, point)[0])
+
+        if not np.isfinite(high_value) or high_value > c_level:
+            break
+
+        low = high
+        high *= growth_factor
+        if high > max_radius:
+            raise ValueError(
+                f"Could not bracket the ROA boundary before reaching max_radius={max_radius:.6g}."
+            )
+
+    for _ in range(max_bisection_steps):
+        mid = 0.5 * (low + high)
+        point[0, :] = mid * direction_vec
+        mid_value = float(_evaluate_lyapunov(lyapunov_func, point)[0])
+        if np.isfinite(mid_value) and mid_value <= c_level:
+            low = mid
+        else:
+            high = mid
+
+    return 0.5 * (low + high)
+
+
+def _infer_roa_pair_limits(
+    lyapunov_func: Callable[[NDArray], NDArray],
+    c_level: float,
+    num_states: int,
+    idx_x: int,
+    idx_y: int,
+    *,
+    num_directions: int = 181,
+    pad_ratio: float = 0.1,
+    min_pad: float = 1e-12,
+) -> list[tuple[float, float]]:
+    """Infer ROA plotting limits from the level set contour in the plotted 2D plane."""
+    if num_directions < 8:
+        raise ValueError("num_directions must be at least 8.")
+
+    base_point = np.zeros((1, num_states), dtype=float)
+    base_value = float(_evaluate_lyapunov(lyapunov_func, base_point)[0])
+
+    angles = np.linspace(0.0, 2.0 * np.pi, num_directions, endpoint=False)
+    boundary_points = np.zeros((num_directions, 2), dtype=float)
+
+    for angle_idx, angle in enumerate(angles):
+        direction = np.zeros(num_states, dtype=float)
+        direction[idx_x] = np.cos(angle)
+        direction[idx_y] = np.sin(angle)
+        radius = _find_level_ray_intersection(
+            lyapunov_func,
+            c_level,
+            direction,
+            base_value=base_value,
+        )
+        boundary_points[angle_idx, 0] = radius * direction[idx_x]
+        boundary_points[angle_idx, 1] = radius * direction[idx_y]
+
+    return _infer_pair_limits(
+        boundary_points[:, 0],
+        boundary_points[:, 1],
+        pad_ratio=pad_ratio,
+        min_pad=min_pad,
+    )
+
 def _state_index_pairs(state_indices: list[int]) -> list[tuple[int, int]]:
     if len(state_indices) < 2:
         raise ValueError("state_indices must contain at least 2 indices.")
@@ -1248,7 +1349,8 @@ def roa(
         Labels for all state dimensions.
     limits : list[tuple[float, float]] | None, optional
         Either `[(x_min, x_max), (y_min, y_max)]` for all pairs or one tuple per
-        state dimension.
+        state dimension. If omitted, limits are inferred from the level set
+        `V(x)=c` along the plotted coordinate axes.
     resolution : int, optional
         Grid resolution per axis.
     plot_3d : bool, optional
@@ -1267,15 +1369,23 @@ def roa(
     labels_full = _resolve_labels(state_labels, nx)
     limits = _resolve_limits(limits)
 
-    if limits is None:
-        raise ValueError("limits must be provided for roa plots.")
-
     pairs = _state_index_pairs(state_indices)
     figs: dict[tuple[int, int], go.Figure] = {}
 
     for idx_x, idx_y in pairs:
         pair_labels = [labels_full[idx_x], labels_full[idx_y]]
         pair_limits = _pair_limits_from_resolved(limits, idx_x, idx_y, nx)
+
+        if pair_limits is None:
+            pair_limits = _infer_roa_pair_limits(
+                lyapunov_func,
+                c_level,
+                nx,
+                idx_x,
+                idx_y,
+                pad_ratio=0.1,
+                min_pad=1e-12,
+            )
 
         x_vec, y_vec, X, _, full_points = _make_pair_grid(
             pair_limits, resolution, nx, idx_x, idx_y
@@ -1358,8 +1468,9 @@ def all(
     """Convenience function to plot trajectories, residuals, Lyapunov, and ROA together.
 
     `limits` is kept as a shared fallback. Prefer `lyapunov_limits` and
-    `roa_limits` to control both plots independently. When neither is provided,
-    padded limits are inferred from the dataset states.
+    `roa_limits` to control both plots independently. When no Lyapunov limits
+    are provided, padded limits are inferred from the dataset states. When no
+    ROA limits are provided, `roa()` infers them from the selected `c_level`.
     """
     lyap_state_labels = state_labels
     all_states = np.vstack([entry.trajectory.states for entry in dataset]) if len(dataset) > 0 else None
@@ -1379,7 +1490,7 @@ def all(
     roa_plot_limits = (
         roa_limits
         if roa_limits is not None
-        else limits if limits is not None else auto_limits
+        else limits
     )
 
     mpc_trajectories(
