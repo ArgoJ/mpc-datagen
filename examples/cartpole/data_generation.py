@@ -131,7 +131,7 @@ def main():
     lyap_fun = lambda x: 0.5 * mdg_linalg.weighted_quadratic_norm(x, P)
     roa_lyap_fun = lambda x: mdg_linalg.weighted_quadratic_norm(x, P)
     roa_cert = ROAVerifier(dataset[0].config)
-    roa_bounds, c_min = roa_cert.roa_bounds()
+    c_min = roa_cert.compute_min_c()
 
     alpha = 1.0 if veri_stats.details.get("asym_stab_report", None) is None else veri_stats.details["asym_stab_report"].min_alpha
     mdg_plots.all(

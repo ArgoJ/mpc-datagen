@@ -347,10 +347,12 @@ def _infer_roa_pair_limits(
         min_pad=min_pad,
     )
 
+
 def _state_index_pairs(state_indices: list[int]) -> list[tuple[int, int]]:
     if len(state_indices) < 2:
         raise ValueError("state_indices must contain at least 2 indices.")
     return list(combinations(state_indices, 2))
+
 
 def _plotly_multiline(x: NDArray, axis: int=0):
     if axis == 0:
@@ -358,17 +360,17 @@ def _plotly_multiline(x: NDArray, axis: int=0):
     elif axis == 1:
         return np.vstack([x, np.full((x.shape[1], 1), np.nan)]).flatten()
 
+
 def _extract_roa_boundary(
         x_vec: NDArray, y_vec: NDArray, Z: NDArray, c_level: float
     ) -> tuple[NDArray, NDArray]:
     """
-    Extrahiert die (x,y) Koordinaten der V(x)=c Kontur aus einem Grid.
-    Funktioniert als Blackbox für Matrizen und Neuronale Netze.
+    Extract the (x,y) coordinates of the contour where Z(x,y) = c_level 
+    using skimage.measure.find_contours.
     """    
     contours = measure.find_contours(Z, c_level)
     
     if not contours:
-        # Falls das Level c_level nicht im Z-Grid existiert
         return np.array([]), np.array([])
         
     main_contour = max(contours, key=len)
