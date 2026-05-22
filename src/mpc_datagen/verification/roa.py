@@ -58,8 +58,8 @@ class ROAVerifier:
             __logger__.warning(f"Constraint '{name}' excludes the origin (k={k_val:.4e}). ROA is empty set.")
             return 0.0
 
-        # c = k^2 / (h^T P^-1 h)
-        denom = h_vec.T @ self.P_inv @ h_vec
+        # c = k^2 / ( 2 * h^T P^-1 h)
+        denom = 2.0 * h_vec.T @ self.P_inv @ h_vec
 
         if denom > 1e-12:
             return (k_val**2) / denom

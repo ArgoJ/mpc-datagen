@@ -129,7 +129,6 @@ def main():
 
     P = info["P"]
     lyap_fun = lambda x: 0.5 * mdg_linalg.weighted_quadratic_norm(x, P)
-    roa_lyap_fun = lambda x: mdg_linalg.weighted_quadratic_norm(x, P)
     roa_cert = ROAVerifier(dataset[0].config)
     c_min = roa_cert.compute_min_c()
 
@@ -146,7 +145,6 @@ def main():
         lyapunov_func=lyap_fun,
         # lyap_state_indices=[1, 2],
         lyap_use_dataset_v=True,
-        roa_lyapunov_func=roa_lyap_fun,
         c_level=c_min,
         base_path=f"{base_path}/inverted_pendulum_on_cart_N{N}_plots",
     )

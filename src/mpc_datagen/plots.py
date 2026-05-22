@@ -1095,7 +1095,7 @@ def lyapunov(
                 plot_3d=plot_3d,
             )
 
-        roa_string = f" with ROA level {roa_level:.3g}" if has_roa else ""
+        roa_string = f" with ROA level ${roa_level:.3g}$" if has_roa else ""
         _apply_pair_layout(
             fig,
             plot_3d=plot_3d,
@@ -1369,116 +1369,6 @@ def cost_descent(
     else:
         return fig
 
-def roa(
-    lyapunov_func: Callable[[NDArray], NDArray],
-    c_level: float,
-    state_indices: list[int] | None = None,
-    nx: int | None = None,
-    state_labels: list[str] | None = None,
-    limits: list[tuple[float, float]] | None = None,
-    resolution: int = 100,
-    plot_3d: bool = False,
-    html_path: str | None = None
-) -> dict[tuple[int, int], go.Figure] | go.Figure | None:
-    """Plot region-of-attraction contours for all selected 2D state pairs.
-
-    Parameters
-    ----------
-    lyapunov_func : Callable[[NDArray], NDArray]
-        Function that evaluates the Lyapunov candidate on a batch of states.
-    c_level : float
-        Level set value defining the ROA boundary via $V(x) = c$.
-    state_indices : list[int] | None, optional
-        State dimensions to combine pairwise. Defaults to all states.
-    nx : int | None, optional
-        Total state dimension. Required if it cannot be inferred from
-        `state_indices` or `state_labels`.
-    state_labels : list[str] | None, optional
-        Labels for all state dimensions.
-    limits : list[tuple[float, float]] | None, optional
-        Either `[(x_min, x_max), (y_min, y_max)]` for all pairs or one tuple per
-        state dimension. If omitted, limits are inferred from the level set
-        `V(x)=c` along the plotted coordinate axes.
-    resolution : int, optional
-        Grid resolution per axis.
-    plot_3d : bool, optional
-        If True, render the Lyapunov landscape as a surface with the ROA level set.
-    html_path : str | None, optional
-        If provided, save the figure(s) to HTML instead of returning them.
-
-    Returns
-    -------
-    dict[tuple[int, int], go.Figure] | go.Figure | None
-        One figure, a dict of figures for multiple pairs, or `None` when saved.
-    """
-    nx = _resolve_num_states(nx, state_indices, state_labels)
-
-    state_indices = _resolve_indices(state_indices, nx)
-    labels_full = _resolve_labels(state_labels, nx)
-    limits = _resolve_limits(limits)
-
-    pairs = _state_index_pairs(state_indices)
-    figs: dict[tuple[int, int], go.Figure] = {}
-
-    for idx_x, idx_y in pairs:
-        pair_labels = [labels_full[idx_x], labels_full[idx_y]]
-        pair_limits = _pair_limits_from_resolved(limits, idx_x, idx_y, nx)
-
-        if pair_limits is None:
-            pair_limits = _infer_roa_pair_limits(
-                lyapunov_func,
-                c_level,
-                nx,
-                idx_x,
-                idx_y,
-                pad_ratio=0.1,
-                min_pad=1e-12,
-            )
-
-        x_vec, y_vec, X, _, full_points = _make_pair_grid(
-            pair_limits, resolution, nx, idx_x, idx_y
-        )
-        Z_flat = _evaluate_lyapunov(lyapunov_func, full_points)
-        Z = Z_flat.reshape(X.shape)
-
-        fig = go.Figure()
-
-        _add_lyapunov_landscape(
-            fig,
-            Z,
-            x_vec,
-            y_vec,
-            plot_3d=plot_3d,
-            name='$V(x)$',
-        )
-        _add_roa_boundary_trace(
-            fig,
-            x_vec,
-            y_vec,
-            Z,
-            c_level,
-            plot_3d=plot_3d,
-        )
-
-        _apply_pair_layout(
-            fig,
-            plot_3d=plot_3d,
-            pair_labels=pair_labels,
-            pair_limits=pair_limits,
-            title_2d=f"Stability Verification: ROA for $c={c_level:.2f}$",
-            title_3d=f"Stability Verification: ROA for $c={c_level:.2f}$ (${pair_labels[0]}$ vs ${pair_labels[1]}$)",
-            zaxis_title="$V(x)$",
-        )
-        figs[(idx_x, idx_y)] = fig
-
-    if html_path:
-        _save_pair_figures(figs, html_path, labels_full, kind="ROA")
-        return None
-
-    if len(figs) == 1:
-        return next(iter(figs.values()))
-    return figs
-
 
 def all(
     dataset: MPCDataset,
@@ -1486,7 +1376,6 @@ def all(
     control_labels: list[str] | None = None,
     limits: list[tuple[float, float]] | None = None,
     lyapunov_limits: list[tuple[float, float]] | None = None,
-    roa_limits: list[tuple[float, float]] | None = None,
     base_path: str | None = None,
     resolution: int = 100,
     plot_3d: bool = False,
@@ -1507,9 +1396,6 @@ def all(
     lyapunov_func: Callable[[NDArray], NDArray] = None,
     lyap_state_indices: list[int] | None = None,
     lyap_use_dataset_v: bool = False,
-
-    # roa specific
-    roa_lyapunov_func: Callable[[NDArray], NDArray] = None,
     c_level: float = None,
     roa_nx: int | None = None,
 ) -> None:
@@ -1535,11 +1421,6 @@ def all(
         if lyapunov_limits is not None
         else limits if limits is not None else auto_limits
     )
-    roa_plot_limits = (
-        roa_limits
-        if roa_limits is not None
-        else limits
-    )
 
     mpc_trajectories(
         dataset=dataset,
@@ -1562,8 +1443,9 @@ def all(
     
     lyapunov_path = f"{base_path}_lyapunov.html" if base_path else None
     lyapunov(
-        dataset=dataset,
         lyapunov_func=lyapunov_func,
+        dataset=dataset,
+        roa_level=c_level,
         state_indices=lyap_state_indices,
         state_labels=lyap_state_labels,
         limits=lyapunov_plot_limits,
@@ -1573,22 +1455,5 @@ def all(
         use_dataset_v=lyap_use_dataset_v
     )
 
-    if roa_lyapunov_func is None:
-        __logger__.warning("ROA Lyapunov function is required for plotting the region of attraction.")
-        return 
-
     if roa_nx is None and len(dataset) > 0:
         roa_nx = int(dataset[0].trajectory.states.shape[1])
-
-    roa_path = f"{base_path}_roa.html" if base_path else None
-    roa(
-        lyapunov_func=roa_lyapunov_func,
-        c_level=c_level,
-        state_indices=lyap_state_indices,
-        nx=roa_nx,
-        state_labels=state_labels,
-        limits=roa_plot_limits,
-        resolution=resolution,
-        plot_3d=plot_3d,
-        html_path=roa_path
-    )
