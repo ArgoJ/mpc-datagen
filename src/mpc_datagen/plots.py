@@ -194,6 +194,26 @@ def _pair_limits_from_resolved(
     )
 
 
+def _combine_pair_limits(
+    *limit_sets: list[tuple[float, float]] | None,
+) -> list[tuple[float, float]] | None:
+    """Combine multiple 2D limit sets into one outer bounding box."""
+    resolved = [limit_set for limit_set in limit_sets if limit_set is not None]
+    if not resolved:
+        return None
+
+    num_axes = len(resolved[0])
+    if any(len(limit_set) != num_axes for limit_set in resolved[1:]):
+        raise ValueError("All limit sets must have the same number of axes.")
+
+    combined: list[tuple[float, float]] = []
+    for axis_idx in range(num_axes):
+        lower = min(float(limit_set[axis_idx][0]) for limit_set in resolved)
+        upper = max(float(limit_set[axis_idx][1]) for limit_set in resolved)
+        combined.append((lower, upper))
+    return combined
+
+
 def _infer_pair_limits(
     x_values: NDArray,
     y_values: NDArray,
@@ -945,6 +965,7 @@ def mpc_trajectories(
 def lyapunov(
     lyapunov_func: Callable[[NDArray], NDArray],
     dataset: MPCDataset | None = None,
+    roa_level: float | None = None,
     state_indices: list[int] | None = None,
     state_labels: list[str] | None = None,
     limits: list[tuple[float, float]] | None = None,
@@ -972,7 +993,8 @@ def lyapunov(
         All Labels for the plotted state dimensions. Defaults to ["State i", ...].
     limits : list of tuples, optional
         Either `[(min_x, max_x), (min_y, max_y)]` for all pairs or one tuple per
-        state dimension. If None, inferred from data with padding.
+        state dimension. If None, inferred from the dataset and optional ROA;
+        when both are available, the outer bounds covering both are used.
     resolution : int, optional
         Grid resolution for the Lyapunov function contour plot.
     plot_3d : bool, optional
@@ -983,6 +1005,7 @@ def lyapunov(
         If True, uses the dataset's value function for trajectory coloring instead of the horizon cost.
     """
     has_dataset = dataset is not None and len(dataset) > 0
+    has_roa = roa_level is not None and roa_level > 0.0
 
     if has_dataset:
         first_traj = dataset[0].trajectory
@@ -999,6 +1022,7 @@ def lyapunov(
     state_indices = _resolve_indices(state_indices, num_states)
     labels_full = _resolve_labels(state_labels, num_states)
     limits = _resolve_limits(limits)
+    all_states = np.vstack([d.trajectory.states for d in dataset]) if has_dataset else None
 
     pairs = _state_index_pairs(state_indices)
     figs: dict[tuple[int, int], go.Figure] = {}
@@ -1008,19 +1032,30 @@ def lyapunov(
         pair_limits = _pair_limits_from_resolved(limits, idx_x, idx_y, num_states)
 
         if pair_limits is None:
-            if has_dataset:
-                all_states = np.vstack([d.trajectory.states for d in dataset])
-                pair_limits = _infer_pair_limits(
+            dataset_limits = None
+            roa_limits = None
+
+            if all_states is not None:
+                dataset_limits = _infer_pair_limits(
                     all_states[:, idx_x],
                     all_states[:, idx_y],
-                    pad_ratio=0.1,
-                    min_pad=1e-12,
                 )
-            else:
-                __logger__.warning(
-                    "Could not infer limits without dataset. Falling back to [-1, 1]^2."
+            if has_roa:
+                roa_limits = _infer_roa_pair_limits(
+                    lyapunov_func,
+                    roa_level,
+                    num_states,
+                    idx_x,
+                    idx_y,
                 )
-                pair_limits = [(-1.0, 1.0), (-1.0, 1.0)]
+
+            pair_limits = _combine_pair_limits(dataset_limits, roa_limits)
+
+        if pair_limits is None:
+            __logger__.warning(
+                "Could not infer limits without dataset. Falling back to [-1, 1]^2."
+            )
+            pair_limits = [(-1.0, 1.0), (-1.0, 1.0)]
 
         x_range, y_range, X, _, grid_points = _make_pair_grid(
             pair_limits, resolution, num_states, idx_x, idx_y
@@ -1050,16 +1085,27 @@ def lyapunov(
                 use_dataset_v=use_dataset_v,
             )
 
+        if has_roa:
+            _add_roa_boundary_trace(
+                fig,
+                x_range,
+                y_range,
+                Z,
+                roa_level,
+                plot_3d=plot_3d,
+            )
+
+        roa_string = f" with ROA level {roa_level:.3g}" if has_roa else ""
         _apply_pair_layout(
             fig,
             plot_3d=plot_3d,
             pair_labels=pair_labels,
             pair_limits=pair_limits,
             title_2d=(
-                _to_latex(f"Lyapunov Landscape ({pair_labels[0]} vs {pair_labels[1]})")
+                _to_latex(f"Lyapunov Landscape ({pair_labels[0]} vs {pair_labels[1]}){roa_string}")
             ),
             title_3d=(
-                _to_latex(f"Lyapunov Landscape 3D ({pair_labels[0]} vs {pair_labels[1]})")
+                _to_latex(f"Lyapunov Landscape 3D ({pair_labels[0]} vs {pair_labels[1]}){roa_string}")
             ),
             zaxis_title=_to_latex("$V(x)$"),
         )
