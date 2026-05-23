@@ -968,6 +968,7 @@ def lyapunov(
     roa_level: float | None = None,
     state_indices: list[int] | None = None,
     state_labels: list[str] | None = None,
+    num_states: int | None = None,
     limits: list[tuple[float, float]] | None = None,
     resolution: int = 100,
     plot_3d: bool = False,
@@ -1008,15 +1009,16 @@ def lyapunov(
     has_roa = roa_level is not None and roa_level > 0.0
 
     if has_dataset:
-        first_traj = dataset[0].trajectory
-        num_states = int(first_traj.states.shape[1])
-    else:
-        if state_indices is None:
-            raise ValueError(
-                "Without dataset, state_indices must be provided to infer state dimension."
-            )
+        num_states = int(dataset[0].config.nx)
+    elif num_states is not None:
+        num_states = int(num_states)
+    elif state_indices is not None:
         num_states = int(
             max(max(state_indices) + 1, len(state_labels) if state_labels is not None else 0)
+        )
+    else:
+        raise ValueError(
+            "Provide at least one of dataset, num_states, or state_indices to determine the number of states."
         )
 
     state_indices = _resolve_indices(state_indices, num_states)
