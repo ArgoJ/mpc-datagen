@@ -5,10 +5,12 @@ import logging
 import plotly.graph_objects as go
 
 from numpy.typing import NDArray
+from dataclasses import dataclass
 from plotly.subplots import make_subplots
 from collections.abc import Callable
 from itertools import combinations
 from skimage import measure
+from pathlib import Path
 
 from .mpc_data import MPCDataset
 
@@ -22,6 +24,20 @@ COLORS = [
 
 
 SUMMARY_LINE_THRESHOLD = 100
+
+
+@dataclass
+class PairPlotResult:
+    idx_x: int
+    idx_y: int
+    label_x: str
+    label_y: str
+    figure: go.Figure
+    
+    @property
+    def file_slug(self) -> str:
+        """Generiert den Dateinamen-Baustein."""
+        return f"{_slug(self.label_x)}_vs_{_slug(self.label_y)}"
 
 
 def _nanpad_stack_1d(series_list: list[NDArray]) -> NDArray:
@@ -106,33 +122,35 @@ def _to_latex(label: str) -> str:
 
 
 def _resolve_num_states(
-    nx: int | None,
-    state_indices: list[int] | None,
-    state_labels: list[str] | None,
+    num_states: int | None = None,
+    dataset: MPCDataset | None = None,
+    state_labels: list[str] | None = None,
+    state_indices: list[int] | None = None,
 ) -> int:
-    """Resolve state dimension for plots without dataset context."""
-    inferred = 0
-    if state_indices:
-        inferred = max(inferred, max(state_indices) + 1)
-    if state_labels is not None:
-        inferred = max(inferred, len(state_labels))
+    nx = None
+
+    if dataset is not None and len(dataset) > 0 and dataset[0].trajectory.states is not None:
+        nx = int(dataset[0].config.nx)
+
+    if num_states is not None:
+        if nx is not None and nx != int(num_states):
+            raise ValueError(
+                f"Conflict: Provided {num_states=} does not match dataset dimension {nx}."
+            )
+        nx = int(num_states)
 
     if nx is None:
-        if inferred < 2:
-            raise ValueError(
-                "nx must be provided when it cannot be inferred from state_indices or state_labels."
-            )
-        nx = inferred
+        inferred_indices = max(state_indices) + 1 if state_indices else 0
+        inferred_labels = len(state_labels) if state_labels else 0
+        nx = max(inferred_indices, inferred_labels)
 
-    num_states = int(nx)
-    if num_states < 2:
-        raise ValueError("nx must be at least 2.")
-    if inferred > num_states:
+    if not nx:
         raise ValueError(
-            f"nx ({num_states}) is smaller than the dimension implied by state_indices/state_labels ({inferred})."
+            "Could not determine the number of states. Please provide "
+            "num_states, a valid dataset, state_indices, or state_labels."
         )
-    return num_states
 
+    return nx
 
 def _resolve_labels(state_labels: list[str] | None, num_states: int) -> list[str]:
     """Resolve default state labels and validate provided labels."""
@@ -641,31 +659,25 @@ def _add_visibility_toggle(fig: go.Figure, trace_indices: list[int], label: str)
             ),
         ]
     )
-
+    
 
 def _save_pair_figures(
-    figs: dict[tuple[int, int], go.Figure],
-    html_path: str,
-    labels_full: list[str],
+    results: list[PairPlotResult],
+    html_path: Path | str,
     *,
     kind: str,
 ) -> None:
     """Save one or multiple pair figures to html files."""
-    dir_path = os.path.dirname(html_path)
-    if dir_path:
-        os.makedirs(dir_path, exist_ok=True)
-
-    if len(figs) == 1:
-        next(iter(figs.values())).write_html(html_path, include_mathjax='cdn')
-        __logger__.info(f"{kind} plot saved to {html_path}.")
-        return
-
-    root, ext = os.path.splitext(html_path)
-    suffix = ext if ext else ".html"
-    for (idx_x, idx_y), fig in figs.items():
-        file_path = f"{root}_{_slug(labels_full[idx_x])}_vs_{_slug(labels_full[idx_y])}{suffix}"
-        fig.write_html(file_path, include_mathjax='cdn')
-    __logger__.info(f"{len(figs)} {kind} plots saved to {root}.")
+    path = Path(html_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    suffix = path.suffix if path.suffix else ".html"
+    base_name = path.stem 
+    
+    for result in results:
+        file_name = f"{base_name}_{result.file_slug}{suffix}"
+        file_path = path.parent / file_name
+        result.figure.write_html(str(file_path), include_mathjax='cdn')
+    __logger__.info(f"{len(results)} {kind} plots saved to {path.parent}.")
 
 
 def _add_summary_band(
@@ -765,7 +777,7 @@ def mpc_trajectories(
     control_labels: list[str],
     plot_predictions: bool = False,
     time_bound: float | None = None,  
-    html_path: str | None = None
+    html_path: Path | str | None = None
 ) -> None:
     """Plot MPC trajectories for states and controls using Plotly.
 
@@ -779,7 +791,7 @@ def mpc_trajectories(
         List of labels for each control variable.
     plot_predictions : bool, optional
         If True, plot the OCP predictions at each step. Default is False.
-    html_path : str, optional
+    html_path : Path | str, optional
         If provided, saves the plot to the specified HTML file.
     time_bound : float, optional
         If provided, limits the x-axis to the specified time range [0, time_bound].
@@ -955,7 +967,8 @@ def mpc_trajectories(
         )
     
     if html_path is not None:
-        os.makedirs(os.path.dirname(html_path), exist_ok=True)
+        html_path = Path(html_path)
+        html_path.parent.mkdir(parents=True, exist_ok=True)
         fig.write_html(html_path, include_mathjax='cdn')
         __logger__.info(f"Trajectories plot saved to {html_path}.")
     else:
@@ -972,9 +985,9 @@ def lyapunov(
     limits: list[tuple[float, float]] | None = None,
     resolution: int = 100,
     plot_3d: bool = False,
-    html_path: str | None = None,
+    html_path: Path | str | None = None,
     use_dataset_v: bool = False,
-):
+) -> list[PairPlotResult] | None:
     """Plot Lyapunov landscapes and trajectories for all 2D state pairs.
 
     If more than two state indices are provided, one figure per 2D combination
@@ -1000,34 +1013,28 @@ def lyapunov(
         Grid resolution for the Lyapunov function contour plot.
     plot_3d : bool, optional
         If True, plot a 3D surface and 3D trajectories. Default is False.
-    html_path : str, optional
+    html_path : Path | str, optional
         If provided, saves the plot to the specified HTML file.
     use_dataset_v : bool, optional
         If True, uses the dataset's value function for trajectory coloring instead of the horizon cost.
+
+    Returns
+    -------
+    list[PairPlotResult] | None
+        A list of results containing the state indices, labels, and figure for each pair. 
+        If `html_path` is provided, the figures are saved to HTML and None is returned.
     """
     has_dataset = dataset is not None and len(dataset) > 0
     has_roa = roa_level is not None and roa_level > 0.0
 
-    if has_dataset:
-        num_states = int(dataset[0].config.nx)
-    elif num_states is not None:
-        num_states = int(num_states)
-    elif state_indices is not None:
-        num_states = int(
-            max(max(state_indices) + 1, len(state_labels) if state_labels is not None else 0)
-        )
-    else:
-        raise ValueError(
-            "Provide at least one of dataset, num_states, or state_indices to determine the number of states."
-        )
-
+    num_states = _resolve_num_states(num_states, dataset, state_labels, state_indices)
     state_indices = _resolve_indices(state_indices, num_states)
     labels_full = _resolve_labels(state_labels, num_states)
     limits = _resolve_limits(limits)
     all_states = np.vstack([d.trajectory.states for d in dataset]) if has_dataset else None
 
     pairs = _state_index_pairs(state_indices)
-    figs: dict[tuple[int, int], go.Figure] = {}
+    results: list[PairPlotResult] = []
 
     for idx_x, idx_y in pairs:
         pair_labels = [labels_full[idx_x], labels_full[idx_y]]
@@ -1114,20 +1121,25 @@ def lyapunov(
 
         _add_visibility_toggle(fig, trajectory_indices, label="Trajectories")
 
-        figs[(idx_x, idx_y)] = fig
+        results.append(PairPlotResult(
+            idx_x=idx_x,
+            idx_y=idx_y,
+            label_x=labels_full[idx_x],
+            label_y=labels_full[idx_y],
+            figure=fig
+        ))
 
     if html_path is not None:
-        _save_pair_figures(figs, html_path, labels_full, kind="Lyapunov")
+        _save_pair_figures(results, html_path, kind="Lyapunov")
         return None
 
-    if len(figs) == 1:
-        return next(iter(figs.values()))
-    return figs
+    return results
+
 
 def relaxed_dp_residual(
     dataset: MPCDataset,
     alpha: float = 1.0,
-    html_path: str | None = None
+    html_path: Path | str | None = None
 ) -> go.Figure | None:
     """Plot Lyapunov-style one-step descent check.
 
@@ -1150,7 +1162,7 @@ def relaxed_dp_residual(
         The relaxation factor in the descent inequality. Use `alpha=1.0` to
         visualize the strict DP inequality, or a smaller `alpha` to match an
         empirically verified decay rate.
-    html_path : str, optional
+    html_path : Path | str, optional
         If provided, saves the plot to the specified HTML file.
     """
     if len(dataset) == 0:
@@ -1229,7 +1241,8 @@ def relaxed_dp_residual(
     )
 
     if html_path is not None:
-        os.makedirs(os.path.dirname(html_path), exist_ok=True)
+        html_path = Path(html_path)
+        html_path.parent.mkdir(parents=True, exist_ok=True)
         fig.write_html(html_path, include_mathjax='cdn')
         __logger__.info(f"Relaxed DP residual plot saved to {html_path}.")
     else:
@@ -1237,7 +1250,7 @@ def relaxed_dp_residual(
 
 def cost_descent(
     dataset: MPCDataset,
-    html_path: str = None,
+    html_path: Path | str | None = None,
     use_optimal_v: bool = False
 ) -> go.Figure | None:
     """Plot cost descent check.
@@ -1262,7 +1275,7 @@ def cost_descent(
     ----------
     dataset : MPCDataset
         The dataset containing trajectories to plot.
-    html_path : str, optional
+    html_path : Path | str, optional
         If provided, saves the plot to the specified HTML file.
     use_optimal_v : bool, optional
         If True, uses the optimal value function along the predicted trajectory
@@ -1365,7 +1378,8 @@ def cost_descent(
     )
 
     if html_path is not None:
-        os.makedirs(os.path.dirname(html_path), exist_ok=True)
+        html_path = Path(html_path)
+        html_path.parent.mkdir(parents=True, exist_ok=True)
         fig.write_html(html_path, include_mathjax='cdn')
         __logger__.info(f"Cost to go descent plot saved to {html_path}.")
     else:
@@ -1378,7 +1392,7 @@ def all(
     control_labels: list[str] | None = None,
     limits: list[tuple[float, float]] | None = None,
     lyapunov_limits: list[tuple[float, float]] | None = None,
-    base_path: str | None = None,
+    base_path: Path | str | None = None,
     resolution: int = 100,
     plot_3d: bool = False,
     limit_pad_ratio: float = 0.1,
@@ -1430,20 +1444,20 @@ def all(
         control_labels=control_labels,
         plot_predictions=plot_predictions,
         time_bound=time_bound,
-        html_path=f"{base_path}_trajectories.html" if base_path else None
+        html_path=Path(f"{base_path}_trajectories.html") if base_path else None
     )
 
-    cost_descent_path = f"{base_path}_cost_descent.html" if base_path else None
+    cost_descent_path = Path(f"{base_path}_cost_descent.html") if base_path else None
     cost_descent(dataset=dataset, html_path=cost_descent_path, use_optimal_v=use_optimal_v)
 
-    relaxed_dp_path = f"{base_path}_relaxed_dp.html" if base_path else None
+    relaxed_dp_path = Path(f"{base_path}_relaxed_dp.html") if base_path else None
     relaxed_dp_residual(dataset=dataset, html_path=relaxed_dp_path, alpha=alpha)
 
     if lyapunov_func is None:
         __logger__.warning("Lyapunov function is required for plotting the lyapunov function.")
         return
     
-    lyapunov_path = f"{base_path}_lyapunov.html" if base_path else None
+    lyapunov_path = Path(f"{base_path}_lyapunov.html") if base_path else None
     lyapunov(
         lyapunov_func=lyapunov_func,
         dataset=dataset,
