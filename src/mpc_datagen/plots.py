@@ -680,6 +680,22 @@ def _save_pair_figures(
     __logger__.info(f"{len(results)} {kind} plots saved to {path.parent}.")
 
 
+def _handle_figure_output(
+    fig: go.Figure, 
+    html_path: Path | str | None, 
+    log_message: str
+) -> go.Figure | None:
+    """Helper to handle HTML export or return the figure."""
+    if html_path is not None:
+        html_path = Path(html_path)
+        html_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.write_html(html_path, include_mathjax='cdn')
+        __logger__.info(f"{log_message} saved to {html_path}.")
+        return None
+    
+    return fig
+
+
 def _add_summary_band(
     fig: go.Figure,
     stacked: NDArray,
@@ -737,6 +753,69 @@ def _add_summary_band(
             showlegend=True,
         )
     )
+
+
+def _add_traces_or_summary(
+    fig: go.Figure,
+    per_entry_deltas: list[tuple[int, NDArray]],
+    total_lines: int,
+    trace_name_func: Callable[[int], str],
+    is_2d: bool = False
+) -> None:
+    """Helper to either plot summary bands or individual traces based on line count."""
+    
+    if total_lines > SUMMARY_LINE_THRESHOLD:
+        __logger__.info(
+            f"Plotting summary stats: {total_lines} lines exceed threshold {SUMMARY_LINE_THRESHOLD}."
+        )
+        
+        # 1D oder 2D Daten für die Zusammenfassung vorbereiten
+        if is_2d:
+            lines_1d = []
+            for _, d in per_entry_deltas:
+                d2 = np.asarray(d, dtype=float)
+                lines_1d.extend([d2[i, :] for i in range(d2.shape[0])])
+            stacked = _nanpad_stack_1d(lines_1d)
+        else:
+            stacked = _nanpad_stack_1d([d for _, d in per_entry_deltas])
+            
+        steps = np.arange(stacked.shape[1])
+        _add_summary_band(fig, stacked, steps)
+        
+    else:
+        # Einzellinien plotten
+        if is_2d:
+            for id, deltas_2d in per_entry_deltas:
+                steps_arr = np.tile(np.arange(deltas_2d.shape[1]), (deltas_2d.shape[0], 1))
+                deltas_flat = _plotly_multiline(deltas_2d)
+                steps_flat = _plotly_multiline(steps_arr)
+                color = COLORS[id % len(COLORS)]
+
+                fig.add_trace(
+                    go.Scatter(
+                        x=steps_flat,
+                        y=deltas_flat,
+                        mode='lines',
+                        name=_to_latex(trace_name_func(id)),
+                        line=dict(color=color, width=2),
+                        legendgroup=_to_latex(f'Run ${id+1}$'),
+                        showlegend=True,
+                    )
+                )
+        else:
+            for id, deltas in per_entry_deltas:
+                color = COLORS[id % len(COLORS)]
+                fig.add_trace(
+                    go.Scatter(
+                        x=np.arange(int(deltas.shape[0])),
+                        y=np.asarray(deltas, dtype=float).reshape(-1),
+                        mode='lines',
+                        name=_to_latex(trace_name_func(id)),
+                        line=dict(color=color, width=2),
+                        legendgroup=_to_latex(f'Run ${id+1}$'),
+                        showlegend=True,
+                    )
+                )
 
 
 def _add_zero_reference_line(fig: go.Figure, x_start: float, x_end: float) -> None:
@@ -966,13 +1045,7 @@ def mpc_trajectories(
             ]
         )
     
-    if html_path is not None:
-        html_path = Path(html_path)
-        html_path.parent.mkdir(parents=True, exist_ok=True)
-        fig.write_html(html_path, include_mathjax='cdn')
-        __logger__.info(f"Trajectories plot saved to {html_path}.")
-    else:
-        fig.show()
+    return _handle_figure_output(fig, html_path, "Trajectories plot")
 
 
 def lyapunov(
@@ -1211,27 +1284,13 @@ def relaxed_dp_residual(
     n_lines = len(per_entry)
     max_len = max((int(d.shape[0]) for _, d in per_entry), default=0)
 
-    if n_lines > SUMMARY_LINE_THRESHOLD:
-        __logger__.info(
-            f"relaxed_dp_residual: {n_lines} lines exceed threshold {SUMMARY_LINE_THRESHOLD}; plotting summary stats."
-        )
-        stacked = _nanpad_stack_1d([d for _, d in per_entry])
-        _add_summary_band(fig, stacked)
-    else:
-        for id, deltas in per_entry:
-            color = COLORS[id % len(COLORS)]
-            fig.add_trace(
-                go.Scatter(
-                    x=np.arange(deltas.shape[0]),
-                    y=deltas,
-                    mode='lines',
-                    name=_to_latex(f'Run ${id+1}$ - $s_n(\\alpha)$'),
-                    line=dict(color=color, width=2),
-                    legendgroup=_to_latex(f'Run ${id+1}$'),
-                    showlegend=True,
-                )
-            )
-
+    _add_traces_or_summary(
+        fig,
+        per_entry,
+        n_lines,
+        trace_name_func=lambda id: f'Run ${id+1}$ - $s_n(\\alpha)$',
+        is_2d=(deltas.ndim == 2)
+    )
     _add_zero_reference_line(fig, 0, max(1, max_len - 1))
     _apply_timeseries_layout(
         fig,
@@ -1240,13 +1299,8 @@ def relaxed_dp_residual(
         yaxis_title=r"$s_n(\alpha)$",
     )
 
-    if html_path is not None:
-        html_path = Path(html_path)
-        html_path.parent.mkdir(parents=True, exist_ok=True)
-        fig.write_html(html_path, include_mathjax='cdn')
-        __logger__.info(f"Relaxed DP residual plot saved to {html_path}.")
-    else:
-        return fig
+    return _handle_figure_output(fig, html_path, "Relaxed DP residual plot")
+
 
 def cost_descent(
     dataset: MPCDataset,
@@ -1311,64 +1365,15 @@ def cost_descent(
         deltas = np.diff(V_arr, axis=dim_idx)
 
         per_entry_deltas.append((id, deltas))
-        total_lines += int(deltas.shape[0])
+        total_lines += 1
 
-    if total_lines > SUMMARY_LINE_THRESHOLD:
-        __logger__.info(
-            f"cost_descent: {total_lines} lines exceed threshold {SUMMARY_LINE_THRESHOLD}; plotting summary stats."
-        )
-
-        if use_optimal_v:
-            stacked = _nanpad_stack_1d([d for _, d in per_entry_deltas])
-            steps = np.arange(stacked.shape[1])
-        else:
-            lines_1d: list[NDArray] = []
-            for _, d in per_entry_deltas:
-                d2 = np.asarray(d, dtype=float)
-                if d2.ndim != 2:
-                    raise ValueError(f"Expected 2D deltas for use_optimal_v=False, got shape {d2.shape}")
-                lines_1d.extend([d2[i, :] for i in range(d2.shape[0])])
-
-            stacked = _nanpad_stack_1d(lines_1d)  # (total_lines, max_n_steps)
-            steps = np.arange(stacked.shape[1])
-
-        _add_summary_band(fig, stacked, steps)
-    else:
-        if use_optimal_v:
-            for id, deltas_1d in per_entry_deltas:
-                color = COLORS[id % len(COLORS)]
-                fig.add_trace(
-                    go.Scatter(
-                        x=np.arange(int(deltas_1d.shape[0])),
-                        y=np.asarray(deltas_1d, dtype=float).reshape(-1),
-                        mode='lines',
-                        name=_to_latex(f'Run ${id+1}$ - $\Delta V$'),
-                        line=dict(color=color, width=2),
-                        legendgroup=_to_latex(f'Run ${id+1}$'),
-                        showlegend=True,
-                    )
-                )
-        else:
-            for id, deltas_2d in per_entry_deltas:
-                steps = np.tile(np.arange(deltas_2d.shape[1]), (deltas_2d.shape[0], 1))
-
-                deltas = _plotly_multiline(deltas_2d)
-                steps = _plotly_multiline(steps)
-
-                color = COLORS[id % len(COLORS)]
-
-                fig.add_trace(
-                    go.Scatter(
-                        x=steps,
-                        y=deltas,
-                        mode='lines',
-                        name=_to_latex(f'Run ${id+1}$ - $\Delta V$'),
-                        line=dict(color=color, width=2),
-                        legendgroup=_to_latex(f'Run ${id+1}$'),
-                        showlegend=True,
-                    )
-                )
-
+    _add_traces_or_summary(
+        fig,
+        per_entry_deltas,
+        total_lines,
+        trace_name_func=lambda id: f'Run ${id+1}$ - $\Delta V$',
+        is_2d=(deltas.ndim == 2)
+    )
     _add_zero_reference_line(fig, 0, 1)
     _apply_timeseries_layout(
         fig,
@@ -1377,13 +1382,7 @@ def cost_descent(
         yaxis_title=r"$\Delta V_k$",
     )
 
-    if html_path is not None:
-        html_path = Path(html_path)
-        html_path.parent.mkdir(parents=True, exist_ok=True)
-        fig.write_html(html_path, include_mathjax='cdn')
-        __logger__.info(f"Cost to go descent plot saved to {html_path}.")
-    else:
-        return fig
+    return _handle_figure_output(fig, html_path, "Cost descent plot")
 
 
 def all(
