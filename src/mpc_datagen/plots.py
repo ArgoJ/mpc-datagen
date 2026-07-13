@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from plotly.subplots import make_subplots
 from collections.abc import Callable
 from itertools import combinations
-from skimage import measure
 from pathlib import Path
 
 from .mpc_data import MPCDataset
@@ -399,82 +398,6 @@ def _plotly_multiline(x: NDArray, axis: int=0):
         return np.vstack([x, np.full((x.shape[1], 1), np.nan)]).flatten()
 
 
-def _is_closed_curve(x_points: NDArray, y_points: NDArray, tol: float) -> bool:
-    """Check whether a polyline is already closed within a tolerance."""
-    if x_points.size == 0 or y_points.size == 0:
-        return False
-    return bool(
-        np.hypot(x_points[0] - x_points[-1], y_points[0] - y_points[-1]) <= tol
-    )
-
-
-def _map_contour_to_axes(
-    contour: NDArray,
-    x_vec: NDArray,
-    y_vec: NDArray,
-    *,
-    padded: bool,
-) -> tuple[NDArray, NDArray]:
-    """Map contour indices returned by skimage to plot coordinates."""
-    x_idx = np.asarray(contour[:, 1], dtype=float)
-    y_idx = np.asarray(contour[:, 0], dtype=float)
-
-    if padded:
-        x_grid = np.arange(len(x_vec), dtype=float) + 1.0
-        y_grid = np.arange(len(y_vec), dtype=float) + 1.0
-        x_points = np.interp(x_idx, x_grid, x_vec, left=x_vec[0], right=x_vec[-1])
-        y_points = np.interp(y_idx, y_grid, y_vec, left=y_vec[0], right=y_vec[-1])
-    else:
-        x_grid = np.arange(len(x_vec), dtype=float)
-        y_grid = np.arange(len(y_vec), dtype=float)
-        x_points = np.interp(x_idx, x_grid, x_vec)
-        y_points = np.interp(y_idx, y_grid, y_vec)
-
-    return x_points, y_points
-
-
-def _extract_roa_boundary(
-        x_vec: NDArray, y_vec: NDArray, Z: NDArray, c_level: float
-    ) -> tuple[NDArray, NDArray]:
-    """
-    Extract the (x,y) coordinates of the contour where Z(x,y) = c_level.
-
-    If the level set is clipped by the plotting box, fall back to the boundary
-    of the in-box mask so the visible ROA contour follows the box edge instead
-    of being closed by a straight chord.
-    """
-    Z_arr = np.asarray(Z, dtype=float)
-    tol = 10.0 * np.finfo(float).eps * max(
-        1.0,
-        float(abs(x_vec[-1] - x_vec[0])) if len(x_vec) > 1 else 1.0,
-        float(abs(y_vec[-1] - y_vec[0])) if len(y_vec) > 1 else 1.0,
-    )
-
-    contours = measure.find_contours(Z_arr, c_level)
-    if contours:
-        main_contour = max(contours, key=len)
-        x_points, y_points = _map_contour_to_axes(
-            main_contour,
-            x_vec,
-            y_vec,
-            padded=False,
-        )
-        if _is_closed_curve(x_points, y_points, tol):
-            return x_points, y_points
-
-    inside_mask = np.isfinite(Z_arr) & (Z_arr <= c_level)
-    if not np.any(inside_mask):
-        return np.array([]), np.array([])
-
-    padded_mask = np.pad(inside_mask.astype(float), 1, mode="constant", constant_values=0.0)
-    clipped_contours = measure.find_contours(padded_mask, 0.5)
-    if not clipped_contours:
-        return np.array([]), np.array([])
-
-    main_contour = max(clipped_contours, key=len)
-    return _map_contour_to_axes(main_contour, x_vec, y_vec, padded=True)
-
-
 def _evaluate_lyapunov(
     lyapunov_func: Callable[[NDArray], NDArray], points: NDArray
 ) -> NDArray:
@@ -601,6 +524,7 @@ def _add_trajectory_traces(
     return indices
 
 
+
 def _add_roa_boundary_trace(
     fig: go.Figure,
     x_vec: NDArray,
@@ -610,36 +534,44 @@ def _add_roa_boundary_trace(
     *,
     plot_3d: bool,
 ) -> None:
-    """Extract and add V(x)=c boundary trace to a figure."""
-    b_x, b_y = _extract_roa_boundary(x_vec, y_vec, Z, c_level)
-    if b_x.size > 0:
-        b_x = np.concatenate([b_x, b_x[:1]])
-        b_y = np.concatenate([b_y, b_y[:1]])
-
     if plot_3d:
-        b_z = np.full_like(b_x, c_level)
         fig.add_trace(
-            go.Scatter3d(
-                x=b_x,
-                y=b_y,
-                z=b_z,
-                mode='lines',
-                line=dict(color='red', width=4),
-                name=_to_latex(f'ROA'),
+            go.Surface(
+                z=Z,
+                x=x_vec,
+                y=y_vec,
+                showscale=False,
+                opacity=0.1,
+                contours=dict(
+                    z=dict(
+                        show=True,
+                        start=c_level,
+                        end=c_level,
+                        size=1,
+                        color='red',
+                        width=4
+                    )
+                ),
+                name=_to_latex('ROA'),
                 showlegend=False,
             )
         )
     else:
         fig.add_trace(
-            go.Scatter(
-                x=b_x,
-                y=b_y,
-                mode='lines',
-                line=dict(color='red', width=3, dash='dash'),
-                fill='toself',
+            go.Contour(
+                z=Z,
+                x=x_vec,
+                y=y_vec,
+                contours=dict(
+                    type='constraint',
+                    operation='<=',
+                    value=c_level
+                ),
                 fillcolor='rgba(255,0,0,0.1)',
-                name=_to_latex(f'ROA'),
-                showlegend=False,
+                line=dict(color='red', width=3, dash='dash'),
+                showscale=False,
+                name=_to_latex('ROA'),
+                showlegend=False
             )
         )
 
