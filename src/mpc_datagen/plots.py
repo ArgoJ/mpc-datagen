@@ -1,8 +1,8 @@
 import numpy as np
-import os
 import re
 import logging
 import plotly.graph_objects as go
+import tikzplotly
 
 from numpy.typing import NDArray
 from dataclasses import dataclass
@@ -652,6 +652,7 @@ def _save_pair_figures(
     html_path: Path | str,
     *,
     kind: str,
+    tikz: bool = True,
 ) -> None:
     """Save one or multiple pair figures to html files."""
     path = Path(html_path)
@@ -663,19 +664,30 @@ def _save_pair_figures(
         file_name = f"{base_name}_{result.file_slug}{suffix}"
         file_path = path.parent / file_name
         result.figure.write_html(str(file_path), include_mathjax='cdn')
+        if tikz:
+            try:
+                tikzplotly.save(file_path.with_suffix("tex"), result.figure)
+            except:
+                __logger__.warning(f"Could not save tikz figure {file_name}. Continuing!")
     __logger__.info(f"{len(results)} {kind} plots saved to {path.parent}.")
 
 
 def _handle_figure_output(
     fig: go.Figure, 
     html_path: Path | str | None, 
-    log_message: str
+    log_message: str,
+    tikz: bool = True,
 ) -> go.Figure | None:
     """Helper to handle HTML export or return the figure."""
     if html_path is not None:
         html_path = Path(html_path)
         html_path.parent.mkdir(parents=True, exist_ok=True)
         fig.write_html(html_path, include_mathjax='cdn')
+        if tikz:
+            try:
+                tikzplotly.save(html_path.with_suffix("tex"), fig)
+            except:
+                __logger__.warning(f"Could not save tikz figure {html_path.name}. Continuing!")
         __logger__.info(f"{log_message} saved to {html_path}.")
         return None
     

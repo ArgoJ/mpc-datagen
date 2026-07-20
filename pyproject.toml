@@ -16,6 +16,7 @@ dependencies = [
     "h5py",
     "rich",
     "scikit-image",
+    "tikzplotly",
     "pkg-logger",
 ]
 
