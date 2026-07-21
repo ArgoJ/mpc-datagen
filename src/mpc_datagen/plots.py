@@ -666,9 +666,9 @@ def _save_pair_figures(
         result.figure.write_html(str(file_path), include_mathjax='cdn')
         if tikz:
             try:
-                tikzplotly.save(file_path.with_suffix("tex"), result.figure)
-            except:
-                __logger__.warning(f"Could not save tikz figure {file_name}. Continuing!")
+                tikzplotly.save(file_path.with_suffix(".tex"), result.figure)
+            except Exception as e:
+                __logger__.warning(f"Could not save tikz figure {file_name}. Continuing!\n{e}")
     __logger__.info(f"{len(results)} {kind} plots saved to {path.parent}.")
 
 
@@ -685,9 +685,9 @@ def _handle_figure_output(
         fig.write_html(html_path, include_mathjax='cdn')
         if tikz:
             try:
-                tikzplotly.save(html_path.with_suffix("tex"), fig)
-            except:
-                __logger__.warning(f"Could not save tikz figure {html_path.name}. Continuing!")
+                tikzplotly.save(html_path.with_suffix(".tex"), fig)
+            except Exception as e:
+                __logger__.warning(f"Could not save tikz figure {html_path.name}. Continuing!\n{e}")
         __logger__.info(f"{log_message} saved to {html_path}.")
         return None
     
