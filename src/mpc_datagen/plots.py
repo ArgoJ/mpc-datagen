@@ -2,7 +2,6 @@ import numpy as np
 import re
 import logging
 import plotly.graph_objects as go
-import tikzplotly
 
 from numpy.typing import NDArray
 from dataclasses import dataclass
@@ -14,6 +13,12 @@ from pathlib import Path
 from .mpc_data import MPCDataset
 
 __logger__ = logging.getLogger(__name__)
+
+
+try:
+    import tikzplotly
+except ImportError as e:
+    __logger__.warning("tikzplotly could not be imported. Continuing because no relevance here!")
 
 
 COLORS = [
