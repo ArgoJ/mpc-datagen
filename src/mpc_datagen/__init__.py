@@ -22,21 +22,39 @@ from .mpc_data import (
 # Verification
 from .verification import (
     StabilityVerifier,
-    ROAVerifier,
     StabilityReport,
     AsymptoticStabilityReport,
     AlphaViolationStats,
     GrüneHorizonReport,
     LyapunovDescentReport,
     VerificationRender,
+)
 
+# Region of Attraction (ROA) - Analytic & Empirical
+from .roa import (
+    ROAVerifier,
+    AnalyticROAVerifier,
+    AnalyticROAReport,
+    AnalyticROARender,
+    EmpiricalROAEstimator,
+    EmpiricalROAReport,
+    EmpiricalROARender,
+    TrajectoryStatus,
+    SampledPoint,
 )
 
 
 # Submodules
-from . import linalg as mdg_linalg
+from . import adapters
+from . import utils
 from . import plots as mdg_plt
-from . import extractor as mdg_extractor
+from . import roa as mdg_roa
+
+# Backward-compatibility submodules
+mdg_adapters = adapters
+mdg_utils = utils
+mdg_linalg = utils.linalg
+mdg_extractor = adapters.acados
 
 __all__ = [
     # Data structures
@@ -57,7 +75,6 @@ __all__ = [
 
     # Verification
     "StabilityVerifier",
-    "ROAVerifier",
     "StabilityReport",
     "AsymptoticStabilityReport",
     "AlphaViolationStats",
@@ -65,10 +82,26 @@ __all__ = [
     "LyapunovDescentReport",
     "VerificationRender",
 
-    # Submodules
+    # Region of Attraction (ROA)
+    "ROAVerifier",
+    "AnalyticROAVerifier",
+    "AnalyticROAReport",
+    "AnalyticROARender",
+    "EmpiricalROAEstimator",
+    "EmpiricalROAReport",
+    "EmpiricalROARender",
+    "TrajectoryStatus",
+    "SampledPoint",
+
+    # Submodules & Utilities
+    "adapters",
+    "mdg_adapters",
+    "utils",
+    "mdg_utils",
     "mdg_linalg",
     "mdg_plt",
     "mdg_extractor",
+    "mdg_roa",
 
     # Helpers
     "add_temp_folder",

@@ -5,8 +5,8 @@ from numpy.typing import NDArray
 from typing import Any, Literal
 from acados_template import AcadosOcp, AcadosOcpSolver, AcadosOcpBatchSolver
 
-from .mpc_data import MPCConfig, LinearSystem, LinearLSCost, Constraints
-from .linalg import discretize_and_linearize_rk4
+from ..mpc_data import MPCConfig, LinearSystem, LinearLSCost, Constraints
+from ..utils.linalg import discretize_and_linearize_rk4
 
 __logger__ = logging.getLogger(__name__)
 

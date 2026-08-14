@@ -20,7 +20,7 @@ from dataclasses import replace, dataclass
 
 from .sampler import SamplerBase
 from .solver_adapter import SolverAdapter, AcadosBatchSolverAdapter, AcadosSolverAdapter
-from ..extractor import resolve_solver, extract_cfg
+from ..adapters.acados import resolve_solver, extract_cfg
 from ..mpc_data import MPCDataset, MPCConfig, MPCData, MPCMeta, MPCTrajectory
 from pkg_logger import suppress_native_output
 

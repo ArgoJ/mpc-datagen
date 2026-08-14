@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
-from mpc_datagen.extractor import (
+from mpc_datagen.adapters.acados import (
     extract_cfg, 
     extract_discretized_dynamics
 )
@@ -18,7 +18,7 @@ from mpc_datagen.extractor import (
 from acados_solver_example import get_basic_double_integrator_ocp_solver
 
 
-class TestExtractors(unittest.TestCase):
+class TestAdapters(unittest.TestCase):
     def __init__(self, methodName = "runTest"):
         super().__init__(methodName)
         self.solver, self.system_info = get_basic_double_integrator_ocp_solver()

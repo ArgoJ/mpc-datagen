@@ -12,7 +12,7 @@ from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
-from mpc_datagen.linalg import lin_c2d_rk4
+from mpc_datagen.utils.linalg import lin_c2d_rk4
 
 
 

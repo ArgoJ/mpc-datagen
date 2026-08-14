@@ -12,7 +12,7 @@ from typing import Any, Generic, Protocol, TypeVar, cast, overload
 from pathlib import Path
 
 
-from .linalg import weighted_quadratic_norm
+from .utils.linalg import weighted_quadratic_norm
 
 __logger__ = logging.getLogger(__name__)
 
