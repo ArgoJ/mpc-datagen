@@ -179,8 +179,9 @@ def _interpolate_dataset_v_grid(
     idx_y: int,
     X: NDArray,
     Y: NDArray,
+    use_solver_v: bool = False,
 ) -> NDArray | None:
-    """Interpolate optimal value function V_N from dataset points onto a 2D meshgrid.
+    """Interpolate optimal value function from dataset points onto a 2D meshgrid.
 
     Parameters
     ----------
@@ -194,13 +195,17 @@ def _interpolate_dataset_v_grid(
         Meshgrid X coordinates.
     Y : NDArray
         Meshgrid Y coordinates.
+    use_solver_v : bool, optional
+        If True, extracts `traj.V_solver`. If False, extracts `traj.V_N`. Default is False.
 
     Returns
     -------
     NDArray | None
-        2D array of interpolated V_N values matching X.shape, or None if interpolation is not possible.
+        2D array of interpolated cost values matching X.shape, or None if interpolation is not possible.
     """
-    x_pts, y_pts, v_pts = _extract_dataset_state_value_pairs(dataset, idx_x, idx_y)
+    x_pts, y_pts, v_pts = _extract_dataset_state_value_pairs(
+        dataset, idx_x, idx_y, use_solver_v=use_solver_v
+    )
     if len(x_pts) < 3:
         return None
 
@@ -221,28 +226,40 @@ def _interpolate_dataset_v_grid(
 def create_lyapunov_from_dataset(
     dataset: MPCDataset,
     method: str = "linear",
+    use_solver_v: bool = False,
 ) -> Callable[[NDArray], NDArray]:
-    """Create a callable Lyapunov function by interpolating the optimal value function V_N from a dataset.
+    """Create a callable Lyapunov function by interpolating the optimal value function from a dataset.
 
     Parameters
     ----------
     dataset : MPCDataset
-        The dataset containing solved MPC trajectories and optimal costs V_N.
+        The dataset containing solved MPC trajectories and optimal costs.
     method : str, optional
         Interpolation method ('linear', 'nearest', 'cubic'). Default is 'linear'.
+    use_solver_v : bool, optional
+        If True, extracts the solver objective value `traj.V_solver` directly from
+        trajectories. If False, extracts `traj.V_N` (or recalculates costs). Default is False.
 
     Returns
     -------
     Callable[[NDArray], NDArray]
         A function accepting an array of states (shape (N, nx) or (nx,)) and returning
-        the interpolated optimal value function V_N(x).
+        the interpolated optimal value function V(x).
     """
     all_states: list[NDArray] = []
     all_v: list[float] = []
 
     for entry in dataset:
         traj = entry.trajectory
-        v_opt = _extract_trajectory_v(traj, entry)
+        if use_solver_v:
+            v_opt = (
+                np.asarray(traj.V_solver, dtype=float).reshape(-1)
+                if traj.V_solver is not None and traj.V_solver.size > 0
+                else None
+            )
+        else:
+            v_opt = _extract_trajectory_v(traj, entry)
+
         if v_opt is None:
             continue
 
@@ -255,7 +272,7 @@ def create_lyapunov_from_dataset(
         all_v.extend(v_opt[:n_pts].tolist())
 
     if not all_states:
-        raise ValueError("Cannot create Lyapunov interpolator: Dataset has no valid (states, V_N) pairs.")
+        raise ValueError("Cannot create Lyapunov interpolator: Dataset has no valid (states, values) pairs.")
 
     pts_mat = np.vstack(all_states)
     vals_arr = np.asarray(all_v, dtype=float)
@@ -334,6 +351,7 @@ def _add_trajectory_traces(
     plot_3d: bool,
     lyapunov_func: Callable[[NDArray], NDArray] | None,
     use_dataset_v: bool,
+    use_solver_v: bool = False,
 ) -> list[int]:
     """Add closed-loop trajectories and return trace indices for toggling."""
     indices: list[int] = []
@@ -341,7 +359,18 @@ def _add_trajectory_traces(
         traj = entry.trajectory
         color = COLORS[idx % len(COLORS)]
 
-        v_opt = _extract_trajectory_v(traj, entry) if use_dataset_v else None
+        if use_dataset_v:
+            if use_solver_v:
+                v_opt = (
+                    np.asarray(traj.V_solver, dtype=float).reshape(-1)
+                    if traj.V_solver is not None and traj.V_solver.size > 0
+                    else _extract_trajectory_v(traj, entry)
+                )
+            else:
+                v_opt = _extract_trajectory_v(traj, entry)
+        else:
+            v_opt = None
+
         states_arr = np.asarray(traj.states, dtype=float)
 
         if plot_3d:
@@ -456,6 +485,7 @@ def lyapunov(
     limits: list[tuple[float, float]] | None = None,
     resolution: int = 100,
     plot_3d: bool = False,
+    use_solver_v: bool = False,
     html_path: Path | str | None = None,
     use_dataset_v: bool = True,
     scatter_points: bool = False,
@@ -464,14 +494,14 @@ def lyapunov(
 
     If more than two state indices are provided, one figure per 2D combination
     is generated. Supports both analytical/custom Lyapunov functions and direct
-    MPC optimal value function V_N plotting extracted from datasets.
+    MPC optimal value function V_N / V_solver plotting extracted from datasets.
 
     Parameters
     ----------
     lyapunov_func : Callable[[NDArray], NDArray], optional
         A function that takes a state vector and returns the Lyapunov value.
         If None and `dataset` is provided, the Lyapunov landscape is constructed
-        from the optimal value function V_N in the dataset.
+        from the optimal value function / solver cost in the dataset.
     dataset : MPCDataset, optional
         The dataset containing trajectories to plot. If None, only the
         Lyapunov landscape and optional regions are shown. Default is None.
@@ -491,13 +521,16 @@ def lyapunov(
         Grid resolution for the Lyapunov function contour/surface plot. Default is 100.
     plot_3d : bool, optional
         If True, plot a 3D surface and 3D trajectories. Default is False.
+    use_solver_v : bool, optional
+        If True, uses `traj.V_solver` directly when reading costs from dataset.
+        If False, uses `traj.V_N` (or recalculates). Default is False.
     html_path : Path | str, optional
         If provided, saves the plot(s) to the specified HTML file.
     use_dataset_v : bool, optional
-        If True, uses the dataset's optimal value function V_N for trajectory
+        If True, uses the dataset's optimal value function / solver cost for trajectory
         z-coordinates instead of evaluating `lyapunov_func`. Default is True.
     scatter_points : bool, optional
-        If True and 3D is active, adds 3D scatter points of all dataset (x, y, V_N) samples.
+        If True and 3D is active, adds 3D scatter points of all dataset (x, y, V) samples.
 
     Returns
     -------
@@ -547,20 +580,28 @@ def lyapunov(
             )
             pair_limits = [(-1.0, 1.0), (-1.0, 1.0)]
 
+        fig = go.Figure()
+
+        if lyapunov_func is not None:
+            landscape_name = "$V(x)$"
+        elif use_solver_v:
+            landscape_name = "$V_{\\mathrm{solver}}$"
+        else:
+            landscape_name = "$V_N(x)$"
+
+        Z = None
         x_range, y_range, X, Y, grid_points = _make_pair_grid(
             pair_limits, resolution, num_states, idx_x, idx_y
         )
 
-        Z = None
         if lyapunov_func is not None:
             Z_flat = _evaluate_lyapunov(lyapunov_func, grid_points)
             Z = Z_flat.reshape(X.shape)
         elif has_dataset:
-            Z = _interpolate_dataset_v_grid(dataset, idx_x, idx_y, X, Y)
+            Z = _interpolate_dataset_v_grid(
+                dataset, idx_x, idx_y, X, Y, use_solver_v=use_solver_v
+            )
 
-        fig = go.Figure()
-
-        landscape_name = "$V_N(x)$" if lyapunov_func is None else "$V(x)$"
         if Z is not None:
             _add_lyapunov_landscape(
                 fig,
@@ -569,6 +610,16 @@ def lyapunov(
                 y_range,
                 plot_3d=plot_3d,
                 name=landscape_name,
+            )
+
+        if has_roa and Z is not None:
+            _add_roa_boundary_trace(
+                fig,
+                x_range,
+                y_range,
+                Z,
+                roa_level,
+                plot_3d=plot_3d,
             )
 
         trajectory_indices = []
@@ -581,10 +632,13 @@ def lyapunov(
                 plot_3d=plot_3d,
                 lyapunov_func=lyapunov_func,
                 use_dataset_v=use_dataset_v,
+                use_solver_v=use_solver_v,
             )
 
         if scatter_points and has_dataset and plot_3d:
-            x_pts, y_pts, v_pts = _extract_dataset_state_value_pairs(dataset, idx_x, idx_y)
+            x_pts, y_pts, v_pts = _extract_dataset_state_value_pairs(
+                dataset, idx_x, idx_y, use_solver_v=use_solver_v
+            )
             if len(x_pts) > 0:
                 fig.add_trace(
                     go.Scatter3d(
@@ -598,17 +652,7 @@ def lyapunov(
                     )
                 )
 
-        if has_roa and Z is not None:
-            _add_roa_boundary_trace(
-                fig,
-                x_range,
-                y_range,
-                Z,
-                roa_level,
-                plot_3d=plot_3d,
-            )
-
-        roa_string = f" with ROA level ${roa_level:.3g}$" if has_roa else ""
+        roa_string = f" with ROA level ${roa_level:.3g}$" if (has_roa and Z is not None) else ""
         title_base = "MPC Value Function" if lyapunov_func is None else "Lyapunov Landscape"
         _apply_pair_layout(
             fig,

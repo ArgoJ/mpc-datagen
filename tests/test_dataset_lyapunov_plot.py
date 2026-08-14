@@ -97,7 +97,7 @@ class TestDatasetLyapunovPlot(PlotAssertionsMixin):
 
     def test_create_lyapunov_from_dataset_evaluation(self) -> None:
         """Test creating a callable Lyapunov interpolator from dataset points."""
-        lyap_fn = create_lyapunov_from_dataset(self.dataset, method="linear")
+        lyap_fn = create_lyapunov_from_dataset(self.dataset, method="linear", use_solver_v=True)
 
         # Evaluate at an exact sampled initial point
         x_sample = self.dataset[0].trajectory.states[0]
@@ -106,6 +106,11 @@ class TestDatasetLyapunovPlot(PlotAssertionsMixin):
 
         # Should match exact value closely at sample points
         self.assertAlmostEqual(interpolated_val, true_val, places=4)
+
+        # Test with use_solver_v=False (using V_N)
+        lyap_fn_vn = create_lyapunov_from_dataset(self.dataset, method="linear", use_solver_v=False)
+        interpolated_val_vn = lyap_fn_vn(x_sample)
+        self.assertAlmostEqual(interpolated_val_vn, true_val, places=4)
 
         # Test batch evaluation
         x_batch = np.array([
@@ -201,6 +206,29 @@ class TestDatasetLyapunovPlot(PlotAssertionsMixin):
             control_labels=["u_1"],
         )
         self.assertIsNotNone(fig_traj)
+
+    def test_lyapunov_dataset_solver_v(self) -> None:
+        """Test lyapunov function directly using dataset V_solver vs V_N."""
+        # 3D with use_solver_v=True
+        res_3d = plots.lyapunov(
+            dataset=self.dataset,
+            plot_3d=True,
+            use_solver_v=True,
+            state_labels=["x_1", "x_2"],
+        )
+        self.assertIsNotNone(res_3d)
+        self.assertEqual(len(res_3d), 1)
+        self.assertGreaterEqual(len(res_3d[0].figure.data), 1)
+
+        # 2D with use_solver_v=False
+        res_2d = plots.lyapunov(
+            dataset=self.dataset,
+            plot_3d=False,
+            use_solver_v=False,
+            state_labels=["x_1", "x_2"],
+        )
+        self.assertIsNotNone(res_2d)
+        self.assertEqual(len(res_2d), 1)
 
 
 if __name__ == "__main__":

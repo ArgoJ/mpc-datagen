@@ -373,8 +373,9 @@ def _extract_dataset_state_value_pairs(
     dataset: MPCDataset,
     idx_x: int,
     idx_y: int,
+    use_solver_v: bool = True,
 ) -> tuple[NDArray, NDArray, NDArray]:
-    """Extract (x, y, V_N) tuples across all trajectories in a dataset.
+    """Extract (x, y, V) tuples across all trajectories in a dataset.
 
     Parameters
     ----------
@@ -384,6 +385,9 @@ def _extract_dataset_state_value_pairs(
         State index for x-axis.
     idx_y : int
         State index for y-axis.
+    use_solver_v : bool, optional
+        If True, extracts `traj.V_solver` directly. If False, extracts `traj.V_N`
+        via `_extract_trajectory_v`. Default is True.
 
     Returns
     -------
@@ -396,7 +400,15 @@ def _extract_dataset_state_value_pairs(
 
     for entry in dataset:
         traj = entry.trajectory
-        v_opt = _extract_trajectory_v(traj, entry)
+        if use_solver_v:
+            v_opt = (
+                np.asarray(traj.V_solver, dtype=float).reshape(-1)
+                if traj.V_solver is not None and traj.V_solver.size > 0
+                else None
+            )
+        else:
+            v_opt = _extract_trajectory_v(traj, entry)
+
         if v_opt is None:
             continue
 
