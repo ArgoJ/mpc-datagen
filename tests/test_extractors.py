@@ -24,7 +24,11 @@ class TestExtractors(unittest.TestCase):
         self.solver, self.system_info = get_basic_double_integrator_ocp_solver()
         
     def test_passes_linear_system_extraction(self) -> None:
-        extracted = extract_discretized_dynamics(self.solver)
+        ocp = self.solver.acados_ocp
+        nx = ocp.dims.nx
+        nu = ocp.dims.nu
+        dt = float(ocp.solver_options.tf) / int(ocp.solver_options.N_horizon)
+        extracted = extract_discretized_dynamics(ocp, np.zeros(nx), np.zeros(nu), dt)
 
         np.testing.assert_allclose(extracted.A, self.system_info["A_d"])
         np.testing.assert_allclose(extracted.B, self.system_info["B_d"])

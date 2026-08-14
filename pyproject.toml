@@ -20,8 +20,20 @@ dependencies = [
     "pkg-logger",
 ]
 
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "torch",
+]
+
 [tool.setuptools.package-dir]
 "" = "src"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+pythonpath = ["src", "tests"]
+
