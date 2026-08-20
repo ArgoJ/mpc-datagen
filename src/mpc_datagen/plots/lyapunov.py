@@ -182,7 +182,7 @@ def _interpolate_dataset_v_grid(
     use_solver_v: bool = False,
     fill_nearest: bool = False,
 ) -> NDArray | None:
-    """Interpolate optimal value function from dataset points onto a 2D meshgrid.
+    """Interpolate dataset optimal value function onto a 2D grid (X, Y).
 
     Parameters
     ----------
@@ -193,15 +193,14 @@ def _interpolate_dataset_v_grid(
     idx_y : int
         State index for y-axis.
     X : NDArray
-        Meshgrid X coordinates.
+        2D grid matrix of x-coordinates (from np.meshgrid).
     Y : NDArray
-        Meshgrid Y coordinates.
+        2D grid matrix of y-coordinates (from np.meshgrid).
     use_solver_v : bool, optional
         If True, extracts `traj.V_solver`. If False, extracts `traj.V_N`. Default is False.
     fill_nearest : bool, optional
         If True, fills NaNs outside the dataset's convex hull with nearest-neighbor extrapolation.
-        Default is False (preserves NaNs outside the sampled data boundary to prevent
-        spurious low-cost plateaus and distorted ROA contours).
+        Default is False (preserves NaNs outside sampled data to prevent artificial plateaus).
 
     Returns
     -------
@@ -365,10 +364,12 @@ def _add_trajectory_traces(
     lyapunov_func: Callable[[NDArray], NDArray] | None,
     use_dataset_v: bool,
     use_solver_v: bool = False,
+    max_trajectories: int | None = None,
 ) -> list[int]:
     """Add closed-loop trajectories and return trace indices for toggling."""
     indices: list[int] = []
-    for idx, entry in enumerate(dataset):
+    trajs_to_plot = dataset if max_trajectories is None else list(dataset)[:max_trajectories]
+    for idx, entry in enumerate(trajs_to_plot):
         traj = entry.trajectory
         color = COLORS[idx % len(COLORS)]
 
@@ -488,6 +489,89 @@ def _add_roa_boundary_trace(
         )
 
 
+def _add_dataset_scatter_trace(
+    fig: go.Figure,
+    dataset: MPCDataset,
+    idx_x: int,
+    idx_y: int,
+    *,
+    plot_3d: bool,
+    use_solver_v: bool = False,
+) -> None:
+    """Add scatter points of valid dataset samples in 2D or 3D."""
+    x_pts, y_pts, v_pts = _extract_dataset_state_value_pairs(
+        dataset, idx_x, idx_y, use_solver_v=use_solver_v
+    )
+    if len(x_pts) == 0:
+        return
+
+    if plot_3d:
+        fig.add_trace(
+            go.Scatter3d(
+                x=x_pts,
+                y=y_pts,
+                z=v_pts,
+                mode='markers',
+                marker=dict(size=2, color=v_pts, colorscale='Viridis', opacity=0.6),
+                name=_to_latex('Dataset Points'),
+                showlegend=True,
+            )
+        )
+    else:
+        fig.add_trace(
+            go.Scatter(
+                x=x_pts,
+                y=y_pts,
+                mode='markers',
+                marker=dict(size=3, color='rgba(200, 200, 200, 0.4)', symbol='circle'),
+                name=_to_latex('Dataset Points'),
+                showlegend=True,
+            )
+        )
+
+
+def _add_failed_states_trace(
+    fig: go.Figure,
+    fail_arr: NDArray,
+    idx_x: int,
+    idx_y: int,
+    *,
+    plot_3d: bool,
+    lyapunov_func: Callable[[NDArray], NDArray] | None = None,
+) -> None:
+    """Add scatter markers for infeasible or failed states in 2D or 3D."""
+    if fail_arr is None or len(fail_arr) == 0:
+        return
+
+    if plot_3d:
+        if lyapunov_func is not None:
+            z_fail = _evaluate_lyapunov(lyapunov_func, fail_arr)
+        else:
+            z_fail = np.zeros(len(fail_arr))
+        fig.add_trace(
+            go.Scatter3d(
+                x=fail_arr[:, idx_x],
+                y=fail_arr[:, idx_y],
+                z=z_fail,
+                mode='markers',
+                marker=dict(size=4, color='rgba(255, 40, 40, 0.85)', symbol='x'),
+                name=_to_latex('Infeasible / Failed States'),
+                showlegend=True,
+            )
+        )
+    else:
+        fig.add_trace(
+            go.Scatter(
+                x=fail_arr[:, idx_x],
+                y=fail_arr[:, idx_y],
+                mode='markers',
+                marker=dict(size=6, color='rgba(255, 40, 40, 0.9)', symbol='x'),
+                name=_to_latex('Infeasible / Failed States'),
+                showlegend=True,
+            )
+        )
+
+
 def lyapunov(
     lyapunov_func: Callable[[NDArray], NDArray] | None = None,
     dataset: MPCDataset | None = None,
@@ -502,7 +586,9 @@ def lyapunov(
     html_path: Path | str | None = None,
     use_dataset_v: bool = True,
     scatter_points: bool = False,
+    scatter_failed: bool = False,
     fill_nearest: bool = False,
+    max_trajectories: int | None = None,
 ) -> list[PairPlotResult] | None:
     """Plot Lyapunov landscapes and trajectories for all 2D state pairs.
 
@@ -544,10 +630,16 @@ def lyapunov(
         If True, uses the dataset's optimal value function / solver cost for trajectory
         z-coordinates instead of evaluating `lyapunov_func`. Default is True.
     scatter_points : bool, optional
-        If True and 3D is active, adds 3D scatter points of all dataset (x, y, V) samples.
+        If True, adds scatter points of all dataset (x, y, V) samples.
+    scatter_failed : bool, optional
+        If True, automatically extracts and displays failed/infeasible rollout states as scatter markers.
     fill_nearest : bool, optional
         If True and interpolating from dataset, fills NaNs outside convex hull with
         nearest-neighbor extrapolation. Default is False (preserves NaNs).
+    max_trajectories : int, optional
+        Maximum number of rollout trajectory lines to draw on the figure.
+        Default is None (draws all trajectories in the dataset). Allows using the full
+        dataset for dense contour estimation while drawing only a clean subset of trajectory curves.
 
     Returns
     -------
@@ -563,6 +655,21 @@ def lyapunov(
     labels_full = _resolve_labels(state_labels, num_states)
     limits = _resolve_limits(limits)
     all_states = np.vstack([d.trajectory.states for d in dataset]) if has_dataset else None
+
+    # Resolve failed states array if requested
+    fail_arr: NDArray | None = None
+    if scatter_failed and has_dataset:
+        st_list = []
+        for d in dataset:
+            is_infeas = False
+            if d.meta is not None and not d.meta.feasible:
+                is_infeas = True
+            elif d.meta is not None and d.meta.status_codes is not None and any(c != 0 for c in d.meta.status_codes):
+                is_infeas = True
+            if is_infeas and d.trajectory.states is not None:
+                st_list.append(np.asarray(d.trajectory.states, dtype=float))
+        if st_list:
+            fail_arr = np.vstack(st_list)
 
     pairs = _state_index_pairs(state_indices)
     results: list[PairPlotResult] = []
@@ -650,24 +757,28 @@ def lyapunov(
                 lyapunov_func=lyapunov_func,
                 use_dataset_v=use_dataset_v,
                 use_solver_v=use_solver_v,
+                max_trajectories=max_trajectories,
             )
 
-        if scatter_points and has_dataset and plot_3d:
-            x_pts, y_pts, v_pts = _extract_dataset_state_value_pairs(
-                dataset, idx_x, idx_y, use_solver_v=use_solver_v
+        if scatter_points and has_dataset:
+            _add_dataset_scatter_trace(
+                fig,
+                dataset,
+                idx_x,
+                idx_y,
+                plot_3d=plot_3d,
+                use_solver_v=use_solver_v,
             )
-            if len(x_pts) > 0:
-                fig.add_trace(
-                    go.Scatter3d(
-                        x=x_pts,
-                        y=y_pts,
-                        z=v_pts,
-                        mode='markers',
-                        marker=dict(size=2, color=v_pts, colorscale='Viridis', opacity=0.6),
-                        name=_to_latex('Dataset Points'),
-                        showlegend=False,
-                    )
-                )
+
+        if fail_arr is not None and len(fail_arr) > 0:
+            _add_failed_states_trace(
+                fig,
+                fail_arr,
+                idx_x,
+                idx_y,
+                plot_3d=plot_3d,
+                lyapunov_func=lyapunov_func,
+            )
 
         roa_string = f" with ROA level ${roa_level:.3g}$" if (has_roa and Z is not None) else ""
         title_base = "MPC Value Function" if lyapunov_func is None else "Lyapunov Landscape"

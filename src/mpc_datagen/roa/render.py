@@ -77,22 +77,27 @@ class EmpiricalROARender(Table):
         self.add_column("Value", style="magenta")
         self.add_column("Assessment", style="green")
 
-        # Rollout Summary
-        conv_style = "[green]OK[/]" if report.num_converged > 0 else "[red]NONE[/]"
+        # Rollout & Transition Summary
+        dec_style = "[green]OK[/]" if report.num_decreased > 0 else "[red]NONE[/]"
         self.add_row(
-            "Converged Rollouts",
-            f"{report.num_converged}/{report.total_trajectories} ({report.convergence_rate:.1f}%)",
-            conv_style,
+            "Lyapunov-Decreasing Transitions",
+            f"{report.num_decreased}/{report.total_transitions} ({report.descent_rate:.1f}%)",
+            dec_style,
         )
         self.add_row(
-            "Feasible Rollouts",
-            f"{report.num_feasible}/{report.total_trajectories} ({report.feasibility_rate:.1f}%)",
+            "Feasible Transitions",
+            f"{report.num_feasible}/{report.total_transitions} ({report.feasibility_rate:.1f}%)",
             "[green]OK[/]" if report.num_feasible > 0 else "[red]NONE[/]",
         )
         self.add_row(
-            "Failed / Diverged Rollouts",
-            f"{report.num_failed}/{report.total_trajectories}",
-            "[green]OK[/]" if report.num_failed == 0 else "[yellow]UNSTABLE/INFEASIBLE[/]",
+            "Failed / Non-Decreasing Transitions",
+            f"{report.num_failed}/{report.total_transitions}",
+            "[green]OK[/]" if report.num_failed == 0 else "[yellow]NON-DECREASING / INFEASIBLE[/]",
+        )
+        self.add_row(
+            "Total Rollouts",
+            str(report.total_trajectories),
+            "Evaluated trajectories",
         )
 
         # Empirical Level Set
@@ -100,7 +105,7 @@ class EmpiricalROARender(Table):
             self.add_row(
                 "Empirical Sublevel Set (c_empirical)",
                 pretty_num(report.c_empirical),
-                "Maximal guaranteed convergent cost level set",
+                "Maximal verified Lyapunov descent level set",
             )
 
         # Convex Hull
@@ -108,7 +113,7 @@ class EmpiricalROARender(Table):
             self.add_row(
                 "Empirical Convex Hull Volume",
                 pretty_num(report.convex_hull_volume),
-                "Convex hull of all converged initial states x0",
+                "Convex hull of verified decreasing states",
             )
 
         # Spatial Bounds
@@ -116,7 +121,7 @@ class EmpiricalROARender(Table):
             bounds_str = ", ".join(
                 [f"x[{k}]: [{pretty_num(lb)}, {pretty_num(ub)}]" for k, (lb, ub) in report.state_bounds_empirical.items()]
             )
-            self.add_row("Empirical State Bounds", bounds_str, "Min/Max across converged rollouts")
+            self.add_row("Empirical State Bounds", bounds_str, "Min/Max across decreasing states")
 
         # Status
         self.add_row("Status", report.message, "[bold green]PASS[/]" if report.is_valid else "[bold red]FAIL[/]")

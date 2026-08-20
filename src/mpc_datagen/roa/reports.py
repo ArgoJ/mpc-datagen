@@ -1,17 +1,18 @@
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import Enum, IntEnum
 from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
 
-class TrajectoryStatus(str, Enum):
-    """Classification status for an empirical MPC trajectory rollout."""
-    FEASIBLE_CONVERGED = "FEASIBLE_CONVERGED"
-    FEASIBLE_UNCONVERGED = "FEASIBLE_UNCONVERGED"
-    CONSTRAINT_VIOLATED = "CONSTRAINT_VIOLATED"
-    INFEASIBLE = "INFEASIBLE"
-    INVALID_DATA = "INVALID_DATA"
+class TrajectoryStatus(IntEnum):
+    """Classification status for an empirical MPC state transition."""
+    FEASIBLE_DECREASED = 0
+    FEASIBLE_INCREASED = 1
+    CONSTRAINT_VIOLATED = 2
+    INFEASIBLE = 3
+    INVALID_DATA = 4
+    UNEVALUABLE = 5
 
 
 @dataclass
@@ -48,14 +49,15 @@ class AnalyticROAReport:
 
 @dataclass
 class SampledPoint:
-    """Represents the classification and metrics of a single sampled initial state rollout."""
-    index: int
-    x0: NDArray
-    x_terminal: NDArray
-    V_0: float | None
-    V_terminal: float | None
+    """Represents the classification and metrics of a single state transition in an MPC rollout."""
+    trajectory_index: int
+    step_index: int
+    x: NDArray
+    x_next: NDArray | None
+    V: float | None
+    V_next: float | None
     is_feasible: bool
-    is_converged: bool
+    is_decreased: bool
     status: TrajectoryStatus
 
 
@@ -65,12 +67,13 @@ class EmpiricalROAReport:
     method: str = "Empirical ROA Estimation"
     is_valid: bool = False
 
-    # Trajectory statistics
+    # Statistics
     total_trajectories: int = 0
+    total_transitions: int = 0
     num_feasible: int = 0
-    num_converged: int = 0
+    num_decreased: int = 0
     num_failed: int = 0
-    convergence_rate: float = float("nan")
+    descent_rate: float = float("nan")
     feasibility_rate: float = float("nan")
 
     # Value function level set (if V_N / costs available)

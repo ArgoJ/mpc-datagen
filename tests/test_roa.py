@@ -69,6 +69,7 @@ class TestROAModule(unittest.TestCase):
         converges: bool = True,
         feasible: bool = True,
         violate_constraints: bool = False,
+        cost_increases: bool = False,
     ) -> MPCData:
         """Helper to create a single MPCData rollout."""
         states = np.zeros((self.T_sim + 1, self.nx), dtype=np.float64)
@@ -79,11 +80,11 @@ class TestROAModule(unittest.TestCase):
         x_curr = x0.copy()
 
         for t in range(self.T_sim):
-            if not converges:
-                # Stays at constant offset (does not converge to origin, but within bounds)
+            if cost_increases:
+                x_next = 1.2 * x_curr
+            elif not converges:
                 x_next = 0.99 * x_curr
             else:
-                # Stable decay to origin
                 x_next = 0.7 * x_curr
 
             if violate_constraints and t == 5:
@@ -95,7 +96,7 @@ class TestROAModule(unittest.TestCase):
 
         # Quadratic value function sequence V_N
         P = np.diag([1.0, 2.0])
-        V_solver = np.array([0.5 * s.T @ P @ s for s in states[:-1]])
+        V_solver = np.array([0.5 * s.T @ P @ s for s in states])
         V_N = V_solver.copy()
 
         traj = MPCTrajectory(
@@ -153,10 +154,10 @@ class TestROAModule(unittest.TestCase):
         self.assertIs(ROAVerifier, AnalyticROAVerifier)
 
     def test_classify_trajectory_states(self) -> None:
-        """Test trajectory classification under different conditions."""
+        """Test transition classification under different conditions."""
         entries = [
             self._create_mock_trajectory(np.array([0.1, 0.1]), converges=True, feasible=True),
-            self._create_mock_trajectory(np.array([0.5, 0.5]), converges=False, feasible=True),
+            self._create_mock_trajectory(np.array([0.01, 0.01]), cost_increases=True, feasible=True),
             self._create_mock_trajectory(np.array([0.2, 0.2]), converges=True, feasible=False),
             self._create_mock_trajectory(np.array([0.3, 0.3]), converges=True, feasible=True, violate_constraints=True),
         ]
@@ -164,27 +165,28 @@ class TestROAModule(unittest.TestCase):
 
         estimator = EmpiricalROAEstimator(dataset=dataset)
 
-        p0 = estimator.classify_trajectory(dataset[0], index=0)
-        self.assertTrue(p0.is_feasible)
-        self.assertTrue(p0.is_converged)
-        self.assertEqual(p0.status, TrajectoryStatus.FEASIBLE_CONVERGED)
+        # Trajectory 0: All steps feasible and decreasing
+        pts0 = estimator.classify_trajectory(dataset[0], index=0)
+        self.assertEqual(len(pts0), self.T_sim)
+        self.assertTrue(all(p.is_feasible for p in pts0))
+        self.assertTrue(all(p.is_decreased for p in pts0))
+        self.assertEqual(pts0[0].status, TrajectoryStatus.FEASIBLE_DECREASED)
 
-        p1 = estimator.classify_trajectory(dataset[1], index=1)
-        self.assertTrue(p1.is_feasible)
-        self.assertFalse(p1.is_converged)
-        self.assertEqual(p1.status, TrajectoryStatus.FEASIBLE_UNCONVERGED)
+        # Trajectory 1: Cost increases
+        pts1 = estimator.classify_trajectory(dataset[1], index=1)
+        self.assertTrue(any(p.status == TrajectoryStatus.FEASIBLE_INCREASED for p in pts1))
 
-        p2 = estimator.classify_trajectory(dataset[2], index=2)
-        self.assertFalse(p2.is_feasible)
-        self.assertFalse(p2.is_converged)
-        self.assertEqual(p2.status, TrajectoryStatus.INFEASIBLE)
+        # Trajectory 2: Solver infeasible
+        pts2 = estimator.classify_trajectory(dataset[2], index=2)
+        self.assertTrue(all(not p.is_feasible for p in pts2))
+        self.assertEqual(pts2[0].status, TrajectoryStatus.INFEASIBLE)
 
-        p3 = estimator.classify_trajectory(dataset[3], index=3)
-        self.assertFalse(p3.is_converged)
-        self.assertEqual(p3.status, TrajectoryStatus.CONSTRAINT_VIOLATED)
+        # Trajectory 3: Constraint violated at step 5
+        pts3 = estimator.classify_trajectory(dataset[3], index=3)
+        self.assertTrue(any(p.status == TrajectoryStatus.CONSTRAINT_VIOLATED for p in pts3))
 
     def test_estimate_full_dataset(self) -> None:
-        """Test complete dataset estimation and report generation."""
+        """Test complete dataset transition estimation and report generation."""
         initial_states = [
             np.array([0.05, 0.05]),
             np.array([-0.05, 0.05]),
@@ -202,17 +204,18 @@ class TestROAModule(unittest.TestCase):
 
         self.assertTrue(report.is_valid)
         self.assertEqual(report.total_trajectories, len(initial_states))
-        self.assertEqual(report.num_converged, len(initial_states))
-        self.assertEqual(report.num_feasible, len(initial_states))
+        self.assertEqual(report.total_transitions, len(initial_states) * self.T_sim)
+        self.assertEqual(report.num_decreased, len(initial_states) * self.T_sim)
+        self.assertEqual(report.num_feasible, len(initial_states) * self.T_sim)
         self.assertIsNotNone(report.c_empirical)
         self.assertGreater(report.c_empirical, 0.0)
         self.assertIsNotNone(report.convex_hull_volume)
         self.assertGreater(report.convex_hull_volume, 0.0)
 
         # Check getter helpers
-        succ_states = estimator.get_successful_initial_states()
-        self.assertEqual(len(succ_states), len(initial_states))
-        fail_states = estimator.get_failed_initial_states()
+        succ_states = estimator.get_successful_states()
+        self.assertEqual(len(succ_states), len(initial_states) * self.T_sim)
+        fail_states = estimator.get_failed_states()
         self.assertEqual(len(fail_states), 0)
 
     def test_dataset_type_enforcement(self) -> None:
@@ -235,6 +238,30 @@ class TestROAModule(unittest.TestCase):
         render_table = EmpiricalROARender(report)
         self.assertIsNotNone(render_table)
         self.assertEqual(render_table.title, "Empirical Region of Attraction (ROA) Report")
+
+    def test_empirical_roa_infeasible_nearest_neighbor(self) -> None:
+        """Test that infeasible points without V constrain c_empirical via nearest neighbor."""
+        # 1. Converged point at origin area: cost ~ 0.015
+        e1 = self._create_mock_trajectory(np.array([0.1, 0.1]), converges=True, feasible=True)
+        # 2. Converged point at mid distance: cost ~ 0.375
+        e2 = self._create_mock_trajectory(np.array([0.5, 0.5]), converges=True, feasible=True)
+        # 3. Converged point further out: cost ~ 1.5
+        e3 = self._create_mock_trajectory(np.array([1.0, 1.0]), converges=True, feasible=True)
+        # 4. Infeasible point close to e2 ([0.5, 0.5]): V will be None
+        e_infeas = self._create_mock_trajectory(np.array([0.52, 0.52]), converges=False, feasible=False)
+        e_infeas.trajectory.V_N = None
+        e_infeas.trajectory.V_solver = None
+
+        dataset = MPCDataset(data_buffer=[e1, e2, e3, e_infeas])
+        estimator = EmpiricalROAEstimator(dataset=dataset)
+        report = estimator.estimate(show_progress=False)
+
+        self.assertIsNotNone(report.c_empirical)
+        # Infeasible point near e2 restricts c_empirical to be strictly less than e2's V
+        v1 = float(e1.trajectory.V_N[0])
+        v2 = float(e2.trajectory.V_N[0])
+        self.assertLessEqual(report.c_empirical, v2)
+        self.assertGreaterEqual(report.c_empirical, v1)
 
 
 if __name__ == "__main__":
