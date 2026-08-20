@@ -180,6 +180,7 @@ def _interpolate_dataset_v_grid(
     X: NDArray,
     Y: NDArray,
     use_solver_v: bool = False,
+    fill_nearest: bool = False,
 ) -> NDArray | None:
     """Interpolate optimal value function from dataset points onto a 2D meshgrid.
 
@@ -197,6 +198,10 @@ def _interpolate_dataset_v_grid(
         Meshgrid Y coordinates.
     use_solver_v : bool, optional
         If True, extracts `traj.V_solver`. If False, extracts `traj.V_N`. Default is False.
+    fill_nearest : bool, optional
+        If True, fills NaNs outside the dataset's convex hull with nearest-neighbor extrapolation.
+        Default is False (preserves NaNs outside the sampled data boundary to prevent
+        spurious low-cost plateaus and distorted ROA contours).
 
     Returns
     -------
@@ -212,12 +217,13 @@ def _interpolate_dataset_v_grid(
     try:
         from scipy.interpolate import griddata
         points = np.column_stack([x_pts, y_pts])
-        # First linear interpolation, fill NaNs with nearest neighbor
         Z_linear = griddata(points, v_pts, (X, Y), method='linear')
-        Z_nearest = griddata(points, v_pts, (X, Y), method='nearest')
-        nan_mask = np.isnan(Z_linear)
-        Z = np.where(nan_mask, Z_nearest, Z_linear)
-        return Z
+        if fill_nearest:
+            Z_nearest = griddata(points, v_pts, (X, Y), method='nearest')
+            nan_mask = np.isnan(Z_linear)
+            Z = np.where(nan_mask, Z_nearest, Z_linear)
+            return Z
+        return Z_linear
     except Exception as e:
         __logger__.warning(f"Could not interpolate dataset value function on grid: {e}")
         return None
@@ -227,6 +233,7 @@ def create_lyapunov_from_dataset(
     dataset: MPCDataset,
     method: str = "linear",
     use_solver_v: bool = False,
+    extrapolate: bool = False,
 ) -> Callable[[NDArray], NDArray]:
     """Create a callable Lyapunov function by interpolating the optimal value function from a dataset.
 
@@ -239,6 +246,9 @@ def create_lyapunov_from_dataset(
     use_solver_v : bool, optional
         If True, extracts the solver objective value `traj.V_solver` directly from
         trajectories. If False, extracts `traj.V_N` (or recalculates costs). Default is False.
+    extrapolate : bool, optional
+        If True and `method="linear"`, falls back to nearest-neighbor for points outside
+        the convex hull. If False, returns NaN outside the convex hull. Default is False.
 
     Returns
     -------
@@ -282,17 +292,20 @@ def create_lyapunov_from_dataset(
     if method == "nearest":
         interp = NearestNDInterpolator(pts_mat, vals_arr)
     else:
-        interp_linear = LinearNDInterpolator(pts_mat, vals_arr)
-        interp_nearest = NearestNDInterpolator(pts_mat, vals_arr)
+        interp_linear = LinearNDInterpolator(pts_mat, vals_arr, fill_value=np.nan)
+        if extrapolate:
+            interp_nearest = NearestNDInterpolator(pts_mat, vals_arr)
 
-        def combined_interp(xi: NDArray) -> NDArray:
-            res = interp_linear(xi)
-            nan_mask = np.isnan(res)
-            if np.any(nan_mask):
-                res[nan_mask] = interp_nearest(xi[nan_mask])
-            return res
+            def combined_interp(xi: NDArray) -> NDArray:
+                res = interp_linear(xi)
+                nan_mask = np.isnan(res)
+                if np.any(nan_mask):
+                    res[nan_mask] = interp_nearest(xi[nan_mask])
+                return res
 
-        interp = combined_interp
+            interp = combined_interp
+        else:
+            interp = interp_linear
 
     def lyapunov_eval(x: NDArray) -> NDArray:
         x_arr = np.asarray(x, dtype=float)
@@ -489,6 +502,7 @@ def lyapunov(
     html_path: Path | str | None = None,
     use_dataset_v: bool = True,
     scatter_points: bool = False,
+    fill_nearest: bool = False,
 ) -> list[PairPlotResult] | None:
     """Plot Lyapunov landscapes and trajectories for all 2D state pairs.
 
@@ -531,6 +545,9 @@ def lyapunov(
         z-coordinates instead of evaluating `lyapunov_func`. Default is True.
     scatter_points : bool, optional
         If True and 3D is active, adds 3D scatter points of all dataset (x, y, V) samples.
+    fill_nearest : bool, optional
+        If True and interpolating from dataset, fills NaNs outside convex hull with
+        nearest-neighbor extrapolation. Default is False (preserves NaNs).
 
     Returns
     -------
@@ -599,7 +616,7 @@ def lyapunov(
             Z = Z_flat.reshape(X.shape)
         elif has_dataset:
             Z = _interpolate_dataset_v_grid(
-                dataset, idx_x, idx_y, X, Y, use_solver_v=use_solver_v
+                dataset, idx_x, idx_y, X, Y, use_solver_v=use_solver_v, fill_nearest=fill_nearest
             )
 
         if Z is not None:

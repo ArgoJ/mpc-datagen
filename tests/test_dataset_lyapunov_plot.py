@@ -112,7 +112,7 @@ class TestDatasetLyapunovPlot(PlotAssertionsMixin):
         interpolated_val_vn = lyap_fn_vn(x_sample)
         self.assertAlmostEqual(interpolated_val_vn, true_val, places=4)
 
-        # Test batch evaluation
+        # Test batch evaluation inside convex hull
         x_batch = np.array([
             [2.0, 1.5],
             [-2.0, 1.0],
@@ -121,6 +121,40 @@ class TestDatasetLyapunovPlot(PlotAssertionsMixin):
         vals = lyap_fn(x_batch)
         self.assertEqual(vals.shape, (3,))
         self.assertGreaterEqual(vals[0], 0.0)
+
+    def test_create_lyapunov_from_dataset_extrapolate(self) -> None:
+        """Test extrapolation behavior for create_lyapunov_from_dataset."""
+        lyap_no_extrap = create_lyapunov_from_dataset(self.dataset, method="linear", extrapolate=False)
+        lyap_with_extrap = create_lyapunov_from_dataset(self.dataset, method="linear", extrapolate=True)
+
+        far_point = np.array([100.0, 100.0])
+        val_no_extrap = lyap_no_extrap(far_point)
+        val_with_extrap = lyap_with_extrap(far_point)
+
+        self.assertTrue(np.isnan(val_no_extrap))
+        self.assertTrue(np.isfinite(val_with_extrap))
+
+    def test_interpolate_dataset_v_grid_preserves_nan(self) -> None:
+        """Test that _interpolate_dataset_v_grid preserves NaNs outside convex hull by default."""
+        from mpc_datagen.plots.lyapunov import _interpolate_dataset_v_grid
+
+        x_vec = np.linspace(-10.0, 10.0, 21)
+        y_vec = np.linspace(-10.0, 10.0, 21)
+        X, Y = np.meshgrid(x_vec, y_vec)
+
+        # By default fill_nearest=False -> NaNs exist outside [-2, 2]
+        Z_no_fill = _interpolate_dataset_v_grid(self.dataset, 0, 1, X, Y, fill_nearest=False)
+        self.assertIsNotNone(Z_no_fill)
+        self.assertTrue(np.any(np.isnan(Z_no_fill)))
+
+        # Center should be finite
+        center_idx = 10  # corresponds to (0, 0)
+        self.assertTrue(np.isfinite(Z_no_fill[center_idx, center_idx]))
+
+        # With fill_nearest=True -> no NaNs
+        Z_filled = _interpolate_dataset_v_grid(self.dataset, 0, 1, X, Y, fill_nearest=True)
+        self.assertIsNotNone(Z_filled)
+        self.assertFalse(np.any(np.isnan(Z_filled)))
 
     def test_create_lyapunov_from_dataset_empty_raises(self) -> None:
         """Test that attempting to create interpolator from empty dataset raises ValueError."""

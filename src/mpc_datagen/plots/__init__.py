@@ -42,6 +42,7 @@ def all(
     lyap_state_indices: list[int] | None = None,
     lyap_use_dataset_v: bool = True,
     lyap_use_optimal_v: bool | None = None,
+    lyap_fill_nearest: bool = False,
     roa_lyapunov_func: Callable[[NDArray], NDArray] | None = None,
     c_level: float | None = None,
     roa_nx: int | None = None,
@@ -87,6 +88,9 @@ def all(
         If True, uses dataset's optimal value function V_N for trajectory z-coordinates.
     lyap_use_optimal_v : bool, optional
         Alias for lyap_use_dataset_v.
+    lyap_fill_nearest : bool, optional
+        If True, fills NaNs outside convex hull with nearest-neighbor extrapolation.
+        Default is False (preserves NaNs).
     roa_lyapunov_func : Callable[[NDArray], NDArray], optional
         Separate Lyapunov function for ROA level set computation if different from lyapunov_func.
     c_level : float, optional
@@ -142,6 +146,7 @@ def all(
         plot_3d=plot_3d,
         html_path=lyapunov_path,
         use_dataset_v=lyap_use_dataset_v,
+        fill_nearest=lyap_fill_nearest,
     )
 
 
