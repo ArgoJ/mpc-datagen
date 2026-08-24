@@ -13,7 +13,6 @@ from .utils import (
     _add_visibility_toggle,
     _apply_pair_layout,
     _combine_pair_limits,
-    _extract_dataset_state_value_pairs,
     _extract_trajectory_v,
     _infer_pair_limits,
     _pair_limits_from_resolved,
@@ -174,58 +173,100 @@ def _make_pair_grid(
 
 
 def _interpolate_dataset_v_grid(
-    dataset: MPCDataset,
-    idx_x: int,
-    idx_y: int,
+    x_pts: NDArray,
+    y_pts: NDArray,
+    v_pts: NDArray,
     X: NDArray,
     Y: NDArray,
-    use_solver_v: bool = False,
     fill_nearest: bool = False,
 ) -> NDArray | None:
-    """Interpolate dataset optimal value function onto a 2D grid (X, Y).
-
-    Parameters
-    ----------
-    dataset : MPCDataset
-        The dataset containing trajectories.
-    idx_x : int
-        State index for x-axis.
-    idx_y : int
-        State index for y-axis.
-    X : NDArray
-        2D grid matrix of x-coordinates (from np.meshgrid).
-    Y : NDArray
-        2D grid matrix of y-coordinates (from np.meshgrid).
-    use_solver_v : bool, optional
-        If True, extracts `traj.V_solver`. If False, extracts `traj.V_N`. Default is False.
-    fill_nearest : bool, optional
-        If True, fills NaNs outside the dataset's convex hull with nearest-neighbor extrapolation.
-        Default is False (preserves NaNs outside sampled data to prevent artificial plateaus).
-
-    Returns
-    -------
-    NDArray | None
-        2D array of interpolated cost values matching X.shape, or None if interpolation is not possible.
-    """
-    x_pts, y_pts, v_pts = _extract_dataset_state_value_pairs(
-        dataset, idx_x, idx_y, use_solver_v=use_solver_v
-    )
+    """Interpolate dataset optimal value function onto a 2D grid (X, Y)."""
     if len(x_pts) < 3:
         return None
 
     try:
         from scipy.interpolate import griddata
-        points = np.column_stack([x_pts, y_pts])
-        Z_linear = griddata(points, v_pts, (X, Y), method='linear')
-        if fill_nearest:
-            Z_nearest = griddata(points, v_pts, (X, Y), method='nearest')
-            nan_mask = np.isnan(Z_linear)
-            Z = np.where(nan_mask, Z_nearest, Z_linear)
-            return Z
+
+        # Subsample if dataset is very large to keep Delaunay triangulation fast (<0.2s)
+        if len(x_pts) > 25000:
+            rng = np.random.default_rng(42)
+            sub_idx = rng.choice(len(x_pts), size=25000, replace=False)
+            pts_interp = np.column_stack([x_pts[sub_idx], y_pts[sub_idx]])
+            v_interp = v_pts[sub_idx]
+        else:
+            pts_interp = np.column_stack([x_pts, y_pts])
+            v_interp = v_pts
+
+        Z_linear = griddata(pts_interp, v_interp, (X, Y), method='linear')
+        nan_mask = np.isnan(Z_linear)
+        if np.any(nan_mask) and fill_nearest:
+            Z_nearest = griddata(pts_interp, v_interp, (X, Y), method='nearest')
+            Z_fill = np.where(nan_mask, Z_nearest, Z_linear)
+            try:
+                from scipy.ndimage import gaussian_filter
+                # Smooth extrapolated region so contours remain continuous without staircase steps
+                Z_smooth = gaussian_filter(Z_fill, sigma=2.0)
+                return np.where(nan_mask, Z_smooth, Z_linear)
+            except Exception:
+                return Z_fill
         return Z_linear
     except Exception as e:
         __logger__.warning(f"Could not interpolate dataset value function on grid: {e}")
         return None
+
+
+def _extract_dataset_plot_data(
+    dataset: MPCDataset,
+    use_solver_v: bool = False,
+    extract_failed: bool = True,
+    max_entries: int | None = 5000,
+) -> tuple[NDArray, NDArray, NDArray | None]:
+    """Single-pass extraction of all states, values, and failed states from dataset."""
+    total_len = len(dataset)
+    if max_entries is not None and total_len > max_entries:
+        indices = np.linspace(0, total_len - 1, max_entries, dtype=int)
+        entries_to_read = [dataset[int(i)] for i in indices]
+    else:
+        entries_to_read = list(dataset)
+
+    state_chunks: list[NDArray] = []
+    v_chunks: list[NDArray] = []
+    fail_chunks: list[NDArray] = []
+
+    for entry in entries_to_read:
+        traj = entry.trajectory
+        if traj.states is None or len(traj.states) == 0:
+            continue
+
+        states = np.asarray(traj.states, dtype=float)
+
+        if use_solver_v:
+            v_opt = (
+                np.asarray(traj.V_solver, dtype=float).reshape(-1)
+                if traj.V_solver is not None and traj.V_solver.size > 0
+                else _extract_trajectory_v(traj, entry)
+            )
+        else:
+            v_opt = _extract_trajectory_v(traj, entry)
+
+        if v_opt is not None and v_opt.size > 0:
+            n_pts = min(len(states), len(v_opt))
+            if n_pts > 0:
+                state_chunks.append(states[:n_pts])
+                v_chunks.append(v_opt[:n_pts])
+
+        if extract_failed and entry.meta is not None:
+            is_infeas = not entry.meta.feasible
+            if not is_infeas and entry.meta.status_codes is not None:
+                is_infeas = any(c != 0 for c in entry.meta.status_codes)
+            if is_infeas:
+                fail_chunks.append(states)
+
+    all_states = np.vstack(state_chunks) if state_chunks else np.empty((0, 2), dtype=float)
+    all_v = np.concatenate(v_chunks) if v_chunks else np.empty(0, dtype=float)
+    failed_states = np.vstack(fail_chunks) if fail_chunks else None
+
+    return all_states, all_v, failed_states
 
 
 def create_lyapunov_from_dataset(
@@ -255,36 +296,15 @@ def create_lyapunov_from_dataset(
         A function accepting an array of states (shape (N, nx) or (nx,)) and returning
         the interpolated optimal value function V(x).
     """
-    all_states: list[NDArray] = []
-    all_v: list[float] = []
+    pts_mat, vals_arr, _ = _extract_dataset_plot_data(
+        dataset,
+        use_solver_v=use_solver_v,
+        extract_failed=False,
+        max_entries=None,
+    )
 
-    for entry in dataset:
-        traj = entry.trajectory
-        if use_solver_v:
-            v_opt = (
-                np.asarray(traj.V_solver, dtype=float).reshape(-1)
-                if traj.V_solver is not None and traj.V_solver.size > 0
-                else None
-            )
-        else:
-            v_opt = _extract_trajectory_v(traj, entry)
-
-        if v_opt is None:
-            continue
-
-        states = np.asarray(traj.states, dtype=float)
-        n_pts = min(states.shape[0], v_opt.shape[0])
-        if n_pts <= 0:
-            continue
-
-        all_states.append(states[:n_pts])
-        all_v.extend(v_opt[:n_pts].tolist())
-
-    if not all_states:
+    if len(pts_mat) == 0:
         raise ValueError("Cannot create Lyapunov interpolator: Dataset has no valid (states, values) pairs.")
-
-    pts_mat = np.vstack(all_states)
-    vals_arr = np.asarray(all_v, dtype=float)
 
     from scipy.interpolate import NearestNDInterpolator, LinearNDInterpolator
 
@@ -476,41 +496,46 @@ def _add_roa_boundary_trace(
                 x=x_vec,
                 y=y_vec,
                 contours=dict(
-                    type='constraint',
-                    operation='<=',
-                    value=c_level,
+                    start=c_level,
+                    end=c_level,
+                    size=1,
+                    coloring='none',
                 ),
-                fillcolor='rgba(255,0,0,0.1)',
                 line=dict(color='red', width=3, dash='dash', smoothing=1.1),
                 showscale=False,
-                name=_to_latex('ROA'),
-                showlegend=False,
+                name=_to_latex(f'ROA ($c={c_level:.3g}$)'),
+                showlegend=True,
             )
         )
 
 
 def _add_dataset_scatter_trace(
     fig: go.Figure,
-    dataset: MPCDataset,
-    idx_x: int,
-    idx_y: int,
+    x_pts: NDArray,
+    y_pts: NDArray,
+    v_pts: NDArray | None = None,
     *,
     plot_3d: bool,
-    use_solver_v: bool = False,
 ) -> None:
     """Add scatter points of valid dataset samples in 2D or 3D."""
-    x_pts, y_pts, v_pts = _extract_dataset_state_value_pairs(
-        dataset, idx_x, idx_y, use_solver_v=use_solver_v
-    )
     if len(x_pts) == 0:
         return
+
+    # Subsample if dataset is huge to prevent multi-megabyte HTML and browser lags
+    if len(x_pts) > 10000:
+        rng = np.random.default_rng(42)
+        sub_idx = rng.choice(len(x_pts), size=10000, replace=False)
+        x_pts = x_pts[sub_idx]
+        y_pts = y_pts[sub_idx]
+        if v_pts is not None and len(v_pts) > 0:
+            v_pts = v_pts[sub_idx]
 
     if plot_3d:
         fig.add_trace(
             go.Scatter3d(
                 x=x_pts,
                 y=y_pts,
-                z=v_pts,
+                z=v_pts if v_pts is not None else np.zeros_like(x_pts),
                 mode='markers',
                 marker=dict(size=2, color=v_pts, colorscale='Viridis', opacity=0.6),
                 name=_to_latex('Dataset Points'),
@@ -528,6 +553,50 @@ def _add_dataset_scatter_trace(
                 showlegend=True,
             )
         )
+
+
+def _resolve_pair_limits(
+    limits: list[tuple[float, float]] | None,
+    dataset: MPCDataset | None,
+    all_states: NDArray | None,
+    roa_level: float | None,
+    lyapunov_func: Callable[[NDArray], NDArray] | None,
+    num_states: int,
+    idx_x: int,
+    idx_y: int,
+) -> list[tuple[float, float]]:
+    """Determine the 2D plotting bounding box for a given state pair."""
+    pair_limits = _pair_limits_from_resolved(limits, idx_x, idx_y, num_states)
+    if pair_limits is not None:
+        return pair_limits
+
+    # 1. State constraints from dataset if available
+    if dataset is not None and len(dataset) > 0:
+        cfg = dataset[0].config
+        if cfg.constraints is not None and cfg.constraints.has_bx():
+            lbx = getattr(cfg.constraints, 'lbx', None)
+            ubx = getattr(cfg.constraints, 'ubx', None)
+            if lbx is not None and ubx is not None and len(lbx) > max(idx_x, idx_y) and len(ubx) > max(idx_x, idx_y):
+                return [
+                    (float(lbx[idx_x]), float(ubx[idx_x])),
+                    (float(lbx[idx_y]), float(ubx[idx_y])),
+                ]
+
+    # 2. Inferred limits from data points / ROA
+    dataset_limits = None
+    roa_limits = None
+
+    if all_states is not None and len(all_states) > 0:
+        dataset_limits = _infer_pair_limits(all_states[:, idx_x], all_states[:, idx_y])
+    if roa_level is not None and roa_level > 0.0 and lyapunov_func is not None:
+        roa_limits = _infer_roa_pair_limits(lyapunov_func, roa_level, num_states, idx_x, idx_y)
+
+    combined = _combine_pair_limits(dataset_limits, roa_limits)
+    if combined is not None:
+        return combined
+
+    __logger__.warning("Could not infer limits; falling back to [-1, 1]^2.")
+    return [(-1.0, 1.0), (-1.0, 1.0)]
 
 
 def _add_failed_states_trace(
@@ -654,77 +723,49 @@ def lyapunov(
     state_indices = _resolve_indices(state_indices, num_states)
     labels_full = _resolve_labels(state_labels, num_states)
     limits = _resolve_limits(limits)
-    all_states = np.vstack([d.trajectory.states for d in dataset]) if has_dataset else None
 
-    # Resolve failed states array if requested
+    all_states: NDArray | None = None
+    all_v: NDArray | None = None
     fail_arr: NDArray | None = None
-    if scatter_failed and has_dataset:
-        st_list = []
-        for d in dataset:
-            is_infeas = False
-            if d.meta is not None and not d.meta.feasible:
-                is_infeas = True
-            elif d.meta is not None and d.meta.status_codes is not None and any(c != 0 for c in d.meta.status_codes):
-                is_infeas = True
-            if is_infeas and d.trajectory.states is not None:
-                st_list.append(np.asarray(d.trajectory.states, dtype=float))
-        if st_list:
-            fail_arr = np.vstack(st_list)
+
+    if has_dataset:
+        all_states, all_v, fail_arr = _extract_dataset_plot_data(
+            dataset,
+            use_solver_v=use_solver_v,
+            extract_failed=scatter_failed,
+            max_entries=5000,
+        )
 
     pairs = _state_index_pairs(state_indices)
     results: list[PairPlotResult] = []
 
     for idx_x, idx_y in pairs:
         pair_labels = [labels_full[idx_x], labels_full[idx_y]]
-        pair_limits = _pair_limits_from_resolved(limits, idx_x, idx_y, num_states)
-
-        if pair_limits is None:
-            dataset_limits = None
-            roa_limits = None
-
-            if all_states is not None:
-                dataset_limits = _infer_pair_limits(
-                    all_states[:, idx_x],
-                    all_states[:, idx_y],
-                )
-            if has_roa and lyapunov_func is not None:
-                roa_limits = _infer_roa_pair_limits(
-                    lyapunov_func,
-                    roa_level,
-                    num_states,
-                    idx_x,
-                    idx_y,
-                )
-
-            pair_limits = _combine_pair_limits(dataset_limits, roa_limits)
-
-        if pair_limits is None:
-            __logger__.warning(
-                "Could not infer limits without dataset or lyapunov_func. Falling back to [-1, 1]^2."
-            )
-            pair_limits = [(-1.0, 1.0), (-1.0, 1.0)]
+        pair_limits = _resolve_pair_limits(
+            limits, dataset, all_states, roa_level, lyapunov_func, num_states, idx_x, idx_y
+        )
 
         fig = go.Figure()
-
-        if lyapunov_func is not None:
-            landscape_name = "$V(x)$"
-        elif use_solver_v:
-            landscape_name = "$V_{\\mathrm{solver}}$"
-        else:
-            landscape_name = "$V_N(x)$"
-
-        Z = None
         x_range, y_range, X, Y, grid_points = _make_pair_grid(
             pair_limits, resolution, num_states, idx_x, idx_y
         )
 
         if lyapunov_func is not None:
-            Z_flat = _evaluate_lyapunov(lyapunov_func, grid_points)
-            Z = Z_flat.reshape(X.shape)
-        elif has_dataset:
+            landscape_name = "$V(x)$"
+            Z = _evaluate_lyapunov(lyapunov_func, grid_points).reshape(X.shape)
+        elif all_states is not None and all_v is not None and len(all_states) > 0:
+            landscape_name = "$V_{\\mathrm{solver}}$" if use_solver_v else "$V_N(x)$"
             Z = _interpolate_dataset_v_grid(
-                dataset, idx_x, idx_y, X, Y, use_solver_v=use_solver_v, fill_nearest=fill_nearest
+                all_states[:, idx_x],
+                all_states[:, idx_y],
+                all_v,
+                X,
+                Y,
+                fill_nearest=fill_nearest,
             )
+        else:
+            landscape_name = "$V_N(x)$"
+            Z = None
 
         if Z is not None:
             _add_lyapunov_landscape(
@@ -760,14 +801,13 @@ def lyapunov(
                 max_trajectories=max_trajectories,
             )
 
-        if scatter_points and has_dataset:
+        if scatter_points and all_states is not None and len(all_states) > 0:
             _add_dataset_scatter_trace(
                 fig,
-                dataset,
-                idx_x,
-                idx_y,
+                all_states[:, idx_x],
+                all_states[:, idx_y],
+                all_v,
                 plot_3d=plot_3d,
-                use_solver_v=use_solver_v,
             )
 
         if fail_arr is not None and len(fail_arr) > 0:

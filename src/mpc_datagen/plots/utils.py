@@ -369,69 +369,6 @@ def _extract_trajectory_v(
     return None
 
 
-def _extract_dataset_state_value_pairs(
-    dataset: MPCDataset,
-    idx_x: int,
-    idx_y: int,
-    use_solver_v: bool = True,
-) -> tuple[NDArray, NDArray, NDArray]:
-    """Extract (x, y, V) tuples across all trajectories in a dataset.
-
-    Parameters
-    ----------
-    dataset : MPCDataset
-        The dataset containing trajectories.
-    idx_x : int
-        State index for x-axis.
-    idx_y : int
-        State index for y-axis.
-    use_solver_v : bool, optional
-        If True, extracts `traj.V_solver` directly. If False, extracts `traj.V_N`
-        via `_extract_trajectory_v`. Default is True.
-
-    Returns
-    -------
-    tuple[NDArray, NDArray, NDArray]
-        Arrays (x_all, y_all, v_all) of corresponding state coordinates and optimal values.
-    """
-    x_list: list[float] = []
-    y_list: list[float] = []
-    v_list: list[float] = []
-
-    for entry in dataset:
-        traj = entry.trajectory
-        if use_solver_v:
-            v_opt = (
-                np.asarray(traj.V_solver, dtype=float).reshape(-1)
-                if traj.V_solver is not None and traj.V_solver.size > 0
-                else None
-            )
-        else:
-            v_opt = _extract_trajectory_v(traj, entry)
-
-        if v_opt is None:
-            continue
-
-        states = np.asarray(traj.states, dtype=float)
-        n_pts = min(states.shape[0], v_opt.shape[0])
-        if n_pts <= 0:
-            continue
-
-        x_pts = states[:n_pts, idx_x].tolist()
-        y_pts = states[:n_pts, idx_y].tolist()
-        v_pts = v_opt[:n_pts].tolist()
-
-        x_list.extend(x_pts)
-        y_list.extend(y_pts)
-        v_list.extend(v_pts)
-
-    return (
-        np.asarray(x_list, dtype=float),
-        np.asarray(y_list, dtype=float),
-        np.asarray(v_list, dtype=float),
-    )
-
-
 def _apply_pair_layout(
     fig: go.Figure,
     *,

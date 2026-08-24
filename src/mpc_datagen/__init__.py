@@ -45,16 +45,10 @@ from .roa import (
 
 
 # Submodules
-from . import adapters
-from . import utils
+from . import adapters as mdg_adapters
+from . import utils as mdg_utils
 from . import plots as mdg_plt
 from . import roa as mdg_roa
-
-# Backward-compatibility submodules
-mdg_adapters = adapters
-mdg_utils = utils
-mdg_linalg = utils.linalg
-mdg_extractor = adapters.acados
 
 __all__ = [
     # Data structures
@@ -94,13 +88,9 @@ __all__ = [
     "SampledPoint",
 
     # Submodules & Utilities
-    "adapters",
     "mdg_adapters",
-    "utils",
     "mdg_utils",
-    "mdg_linalg",
     "mdg_plt",
-    "mdg_extractor",
     "mdg_roa",
 
     # Helpers
