@@ -241,6 +241,19 @@ class TestDatasetLyapunovPlot(PlotAssertionsMixin):
         )
         self.assertIsNotNone(fig_traj)
 
+    def test_trajectory_error_bands(self) -> None:
+        """Test trajectory error bands plotting."""
+        fig_err = plots.trajectory_error_bands(
+            errors_dataset=self.dataset,
+            state_labels=["x_1", "x_2"],
+            control_labels=["u_1"],
+            plot_controls=True,
+            show_individual=True,
+            show_median=True,
+        )
+        self.assertIsNotNone(fig_err)
+
+
     def test_lyapunov_dataset_solver_v(self) -> None:
         """Test lyapunov function directly using dataset V_solver vs V_N."""
         # 3D with use_solver_v=True

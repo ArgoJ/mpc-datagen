@@ -1,5 +1,6 @@
 from . import linalg
 from . import render
+from . import dataset
 
 from .render import pretty_num, prettify_text
 from .linalg import (
@@ -18,11 +19,22 @@ from .linalg import (
     discretize_and_linearize_rk4,
     lin_c2d_rk4,
 )
+from .dataset import (
+    MatchedStatePair,
+    get_initial_states,
+    extract_initial_states,
+    find_matching_initial_states,
+    match_initial_states,
+    compute_entry_error,
+    create_error_dataset,
+    compute_error_dataset,
+)
 
 __all__ = [
     # Submodules
     "linalg",
     "render",
+    "dataset",
 
     # Render helpers
     "pretty_num",
@@ -43,4 +55,15 @@ __all__ = [
     "rk4_step",
     "discretize_and_linearize_rk4",
     "lin_c2d_rk4",
+
+    # Dataset helpers
+    "MatchedStatePair",
+    "get_initial_states",
+    "extract_initial_states",
+    "find_matching_initial_states",
+    "match_initial_states",
+    "compute_entry_error",
+    "create_error_dataset",
+    "compute_error_dataset",
 ]
+

@@ -19,6 +19,18 @@ from .mpc_data import (
     Constraints,
 )
 
+# Dataset utilities
+from .utils.dataset import (
+    create_error_dataset,
+    compute_error_dataset,
+    find_matching_initial_states,
+    match_initial_states,
+    get_initial_states,
+    extract_initial_states,
+    MatchedStatePair,
+)
+
+
 # Verification
 from .verification import (
     StabilityVerifier,
@@ -92,6 +104,15 @@ __all__ = [
     "mdg_utils",
     "mdg_plt",
     "mdg_roa",
+
+    # Dataset utilities
+    "create_error_dataset",
+    "compute_error_dataset",
+    "find_matching_initial_states",
+    "match_initial_states",
+    "get_initial_states",
+    "extract_initial_states",
+    "MatchedStatePair",
 
     # Helpers
     "add_temp_folder",

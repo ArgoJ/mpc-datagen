@@ -9,7 +9,7 @@ from ..mpc_data import MPCDataset
 from . import utils
 from .descent import cost_descent, relaxed_dp_residual
 from .lyapunov import create_lyapunov_from_dataset, lyapunov
-from .trajectories import mpc_trajectories, trajectories
+from .trajectories import mpc_trajectories, trajectories, trajectory_error_bands, error_bands, error_band
 from .utils import COLORS, PairPlotResult, _infer_state_limits
 
 __logger__ = logging.getLogger(__name__)
@@ -157,6 +157,9 @@ __all__ = [
     "create_lyapunov_from_dataset",
     "mpc_trajectories",
     "trajectories",
+    "trajectory_error_bands",
+    "error_bands",
+    "error_band",
     "relaxed_dp_residual",
     "cost_descent",
 
