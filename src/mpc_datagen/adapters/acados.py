@@ -6,7 +6,7 @@ from typing import Any, Literal
 from acados_template import AcadosOcp, AcadosOcpSolver, AcadosOcpBatchSolver
 
 from ..mpc_data import MPCConfig, LinearSystem, LinearLSCost, Constraints
-from ..utils.linalg import discretize_and_linearize_rk4
+from ..utils.linalg import discretize_and_linearize_euler, discretize_and_linearize_rk4
 
 __logger__ = logging.getLogger(__name__)
 
@@ -249,6 +249,8 @@ def extract_discretized_dynamics(
     
     Parameters
     ----------
+    ocp : AcadosOcp
+        Acados OCP description containing solver options and model expressions.
     x_lin, u_lin : NDArray
         Linearization points for state and input.
     dt : float
@@ -256,27 +258,59 @@ def extract_discretized_dynamics(
 
     Returns
     -------
-    Ad, Bd : NDArray
-        Discrete-time state and input matrices.
-    gd : NDArray
-        Affine offset term so that $x^+ \\approx Ad x + Bd u + gd$.
+    LinearSystem
+        Discrete-time system containing Ad, Bd, and gd.
     """
     if ocp.solver_options.integrator_type != "ERK" or ocp.model.f_expl_expr is None:
         raise NotImplementedError("Only explicit ODE models are supported in this verifier.")
 
-    if ocp.solver_options.sim_method_num_stages is not None and np.any(ocp.solver_options.sim_method_num_stages != 4):
-        raise NotImplementedError("Only RK4 integration is supported in this verifier.")
-    
-    if ocp.solver_options.sim_method_num_steps is not None and np.any(ocp.solver_options.sim_method_num_steps < 1):
-        raise NotImplementedError("Number of integration steps must be at least 1.")
+    num_stages = ocp.solver_options.sim_method_num_stages
+    if num_stages is None:
+        num_stages = 4
+    else:
+        stages_arr = np.asarray(num_stages)
+        if stages_arr.ndim > 0:
+            if np.any(stages_arr != stages_arr.flat[0]):
+                raise NotImplementedError("Non-uniform sim_method_num_stages across shooting intervals is not supported.")
+            num_stages = int(stages_arr.flat[0])
+        else:
+            num_stages = int(stages_arr)
+
+    if num_stages not in (1, 4):
+        raise NotImplementedError(
+            f"Only ERK with 1 stage (Euler) or 4 stages (RK4) is supported in this verifier, got {num_stages}."
+        )
+
+    num_steps = ocp.solver_options.sim_method_num_steps
+    if num_steps is None:
+        num_steps = 1
+    else:
+        steps_arr = np.asarray(num_steps)
+        if np.any(steps_arr < 1):
+            raise NotImplementedError("Number of integration steps must be at least 1.")
+        if steps_arr.ndim > 0:
+            if np.any(steps_arr != steps_arr.flat[0]):
+                raise NotImplementedError("Non-uniform sim_method_num_steps across shooting intervals is not supported.")
+            num_steps = int(steps_arr.flat[0])
+        else:
+            num_steps = int(steps_arr)
 
     x = ocp.model.x
     u = ocp.model.u
     f_expr = ocp.model.f_expl_expr
 
-    return LinearSystem(*discretize_and_linearize_rk4(
-        x, u, f_expr, dt, x_lin, u_lin
-    ))
+    if num_stages == 1:
+        Ad, Bd, gd = discretize_and_linearize_euler(
+            x, u, f_expr, dt, x_lin, u_lin, num_steps=num_steps
+        )
+    elif num_stages == 4:
+        Ad, Bd, gd = discretize_and_linearize_rk4(
+            x, u, f_expr, dt, x_lin, u_lin, num_steps=num_steps
+        )
+    else:
+        raise NotImplementedError(f"Unsupported sim_method_num_stages: {num_stages}")
+
+    return LinearSystem(Ad, Bd, gd)
 
 
 def extract_model(

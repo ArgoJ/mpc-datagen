@@ -272,8 +272,14 @@ def get_ocp_solver(
     ocp, info = get_ocp(Q, R, dt, N, terminal_mode, sys_cfg)
     if use_temp_dir:
         ocp, file_name = add_temp_folder(ocp, f"{ocp.model.name}_ocp.json")
+    else:
+        file_name = f"{ocp.model.name}_ocp.json"
 
-    solver = AcadosOcpSolver(ocp, json_file=file_name, verbose=False)
+    if hasattr(ocp, "code_gen_opts") and hasattr(ocp.code_gen_opts, "json_file"):
+        ocp.code_gen_opts.json_file = file_name
+        solver = AcadosOcpSolver(ocp, verbose=False)
+    else:
+        solver = AcadosOcpSolver(ocp, json_file=file_name, verbose=False)
     return solver, info
 
 
@@ -295,12 +301,23 @@ def get_batch_ocp_solver(
     ocp.solver_options.num_threads_in_batch_solve = num_threads
     if use_temp_dir:
         ocp, file_name = add_temp_folder(ocp, f"{ocp.model.name}_batch_ocp.json")
+    else:
+        file_name = f"{ocp.model.name}_batch_ocp.json"
 
-    batch_solver = AcadosOcpBatchSolver(
-        ocp,
-        N_batch_init=batch_size,
-        num_threads_in_batch_solve=num_threads,
-        json_file=file_name,
-        verbose=False
-    )
+    if hasattr(ocp, "code_gen_opts") and hasattr(ocp.code_gen_opts, "json_file"):
+        ocp.code_gen_opts.json_file = file_name
+        batch_solver = AcadosOcpBatchSolver(
+            ocp,
+            N_batch_init=batch_size,
+            num_threads_in_batch_solve=num_threads,
+            verbose=False
+        )
+    else:
+        batch_solver = AcadosOcpBatchSolver(
+            ocp,
+            N_batch_init=batch_size,
+            num_threads_in_batch_solve=num_threads,
+            json_file=file_name,
+            verbose=False
+        )
     return batch_solver, info

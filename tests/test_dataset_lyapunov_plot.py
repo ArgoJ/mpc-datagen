@@ -136,14 +136,19 @@ class TestDatasetLyapunovPlot(PlotAssertionsMixin):
 
     def test_interpolate_dataset_v_grid_preserves_nan(self) -> None:
         """Test that _interpolate_dataset_v_grid preserves NaNs outside convex hull by default."""
-        from mpc_datagen.plots.lyapunov import _interpolate_dataset_v_grid
+        from mpc_datagen.plots.lyapunov import _interpolate_dataset_v_grid, _extract_dataset_plot_data
 
         x_vec = np.linspace(-10.0, 10.0, 21)
         y_vec = np.linspace(-10.0, 10.0, 21)
         X, Y = np.meshgrid(x_vec, y_vec)
 
+        all_states, all_v, _ = _extract_dataset_plot_data(self.dataset)
+        x_pts = all_states[:, 0]
+        y_pts = all_states[:, 1]
+        v_pts = all_v
+
         # By default fill_nearest=False -> NaNs exist outside [-2, 2]
-        Z_no_fill = _interpolate_dataset_v_grid(self.dataset, 0, 1, X, Y, fill_nearest=False)
+        Z_no_fill = _interpolate_dataset_v_grid(x_pts, y_pts, v_pts, X, Y, fill_nearest=False)
         self.assertIsNotNone(Z_no_fill)
         self.assertTrue(np.any(np.isnan(Z_no_fill)))
 
@@ -152,7 +157,7 @@ class TestDatasetLyapunovPlot(PlotAssertionsMixin):
         self.assertTrue(np.isfinite(Z_no_fill[center_idx, center_idx]))
 
         # With fill_nearest=True -> no NaNs
-        Z_filled = _interpolate_dataset_v_grid(self.dataset, 0, 1, X, Y, fill_nearest=True)
+        Z_filled = _interpolate_dataset_v_grid(x_pts, y_pts, v_pts, X, Y, fill_nearest=True)
         self.assertIsNotNone(Z_filled)
         self.assertFalse(np.any(np.isnan(Z_filled)))
 

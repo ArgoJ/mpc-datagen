@@ -436,6 +436,13 @@ def add_temp_folder(ocp: AcadosOcp, file_name: str) -> tuple[AcadosOcp, str]:
     """
     temp_dir = tempfile.mkdtemp(prefix=f"acados_{ocp.model.name}_")
     __logger__.info(f"Created temporary directory for solver: {temp_dir}")
-    ocp.code_export_directory = os.path.join(temp_dir, "code_export")
+    export_dir = os.path.join(temp_dir, "code_export")
+    if hasattr(ocp, "code_gen_opts") and hasattr(ocp.code_gen_opts, "code_export_directory"):
+        ocp.code_gen_opts.code_export_directory = export_dir
+    else:
+        ocp.code_export_directory = export_dir
+
     file_name = os.path.join(temp_dir, f"{ocp.model.name}_ocp.json")
+    if hasattr(ocp, "code_gen_opts") and hasattr(ocp.code_gen_opts, "json_file"):
+        ocp.code_gen_opts.json_file = file_name
     return ocp, file_name

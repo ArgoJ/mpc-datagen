@@ -97,6 +97,11 @@ def dare_residual(A: NDArray, B: NDArray, Q: NDArray, R: NDArray, P: NDArray) ->
     return 0.5*((P - P_rhs) + (P - P_rhs).T)
 
 
+def euler_step(x, u, f_fun, h):
+    """Explicit Euler integration step."""
+    return x + h * f_fun(x, u)
+
+
 def rk4_step(x, u, f_fun, h):
     """Runge-Kutta 4th order integration step."""
     k1 = f_fun(x, u)
@@ -104,6 +109,61 @@ def rk4_step(x, u, f_fun, h):
     k3 = f_fun(x + 0.5*h*k2, u)
     k4 = f_fun(x + h*k3, u)
     return x + (h/6.0)*(k1 + 2*k2 + 2*k3 + k4)
+
+
+def discretize_and_linearize_euler(
+    x_sym: ca.SX,
+    u_sym: ca.SX,
+    f_expl_expr: ca.SX,
+    dt: float,
+    x_lin: NDArray,
+    u_lin: NDArray,
+    num_steps: int = 1,
+) -> tuple[NDArray, NDArray, NDArray]:
+    """Discretize and linearize continuous-time dynamics using explicit Euler method.
+
+    Parameters
+    ----------
+    x_sym, u_sym : ca.SX
+        Symbolic state and input variable.
+    f_expl_expr : ca.SX
+        Symbolic expression of continuous-time dynamics (x_dot = f_expl_expr).
+    dt : float
+        Discretization time step.
+    x_lin, u_lin : NDArray
+        State and input around which to linearize.
+    num_steps : int, optional
+        Number of Euler steps within dt, by default 1.
+
+    Returns
+    -------
+    Ad, Bd : NDArray
+        Discrete-time state and input matrix.
+    gd : NDArray
+        Discretization offset term.
+    """
+    f_fun = ca.Function("f_fun", [x_sym, u_sym], [f_expl_expr])
+
+    h = float(dt) / int(num_steps)
+    x_next = x_sym
+    for _ in range(int(num_steps)):
+        x_next = euler_step(x_next, u_sym, f_fun, h)
+    phi = x_next
+
+    Ad_expr = ca.jacobian(phi, x_sym)
+    Bd_expr = ca.jacobian(phi, u_sym)
+
+    phi_fun = ca.Function("phi_fun", [x_sym, u_sym], [phi])
+    Ad_fun  = ca.Function("Ad_fun",  [x_sym, u_sym], [Ad_expr])
+    Bd_fun  = ca.Function("Bd_fun",  [x_sym, u_sym], [Bd_expr])
+
+    phi0 = np.array(phi_fun(x_lin, u_lin)).astype(float)
+    Ad   = np.array(Ad_fun(x_lin, u_lin)).astype(float)
+    Bd   = np.array(Bd_fun(x_lin, u_lin)).astype(float)
+
+    gd = (phi0 - Ad @ np.asarray(x_lin).reshape(-1,) - Bd @ np.asarray(u_lin).reshape(-1,)).reshape(-1,)
+    return Ad, Bd, gd
+
 
 def discretize_and_linearize_rk4(
     x_sym: ca.SX,
@@ -157,6 +217,38 @@ def discretize_and_linearize_rk4(
 
     gd = (phi0 - Ad @ np.asarray(x_lin).reshape(-1,) - Bd @ np.asarray(u_lin).reshape(-1,)).reshape(-1,)
     return Ad, Bd, gd
+
+
+def lin_c2d_euler(A: NDArray, B: NDArray, dt: float, num_steps: int = 1) -> tuple[NDArray, NDArray]:
+    """Discretize linear system x_dot = A x + B u using explicit Euler method.
+
+    Parameters
+    ----------
+    A, B : NDArray
+        Continuous-time state and input matrix.
+    dt : float
+        Discretization time step.
+    num_steps : int, optional
+        Number of Euler steps within dt, by default 1.
+
+    Returns
+    -------
+    Ad, Bd : NDArray
+        Discrete-time state and input matrix.
+    """
+    n = A.shape[0]
+    m = B.shape[1]
+
+    x_sym = ca.SX.sym("x", n)
+    u_sym = ca.SX.sym("u", m)
+    f_expl_expr = A @ x_sym + B @ u_sym
+
+    Ad, Bd, _ = discretize_and_linearize_euler(
+        x_sym, u_sym, f_expl_expr, dt,
+        x_lin=np.zeros((n,)), u_lin=np.zeros((m,)),
+        num_steps=num_steps
+    )
+    return Ad, Bd
 
 
 def lin_c2d_rk4(A: NDArray, B: NDArray, dt: float, num_steps: int = 1) -> tuple[NDArray, NDArray]:

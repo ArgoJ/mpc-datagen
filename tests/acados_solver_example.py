@@ -169,7 +169,12 @@ def get_ocp_solver(
         # No terminal bounds.
         pass
 
-    solver = AcadosOcpSolver(ocp, json_file=f"{ocp.model.name}_ocp.json")
+    json_file = f"{ocp.model.name}_ocp.json"
+    if hasattr(ocp, "code_gen_opts") and hasattr(ocp.code_gen_opts, "json_file"):
+        ocp.code_gen_opts.json_file = json_file
+        solver = AcadosOcpSolver(ocp)
+    else:
+        solver = AcadosOcpSolver(ocp, json_file=json_file)
 
     info = {
         "A_d": A_d,

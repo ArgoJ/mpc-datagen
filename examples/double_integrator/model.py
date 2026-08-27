@@ -180,7 +180,11 @@ def get_ocp_solver(
     if use_temp_dir:
         solver = get_temp_solver(ocp)
     else:
-        solver = AcadosOcpSolver(ocp, json_file=json_file)
+        if hasattr(ocp, "code_gen_opts") and hasattr(ocp.code_gen_opts, "json_file"):
+            ocp.code_gen_opts.json_file = json_file
+            solver = AcadosOcpSolver(ocp)
+        else:
+            solver = AcadosOcpSolver(ocp, json_file=json_file)
 
     info = {
         "A_d": A_d,
