@@ -282,18 +282,29 @@ def trajectory_error_bands(
     num_plots = num_states + (num_controls if plot_controls and num_controls > 0 else 0)
 
     # Collect state error trajectories: (M, T_state, num_states)
-    state_errors_list = [entry.trajectory.states for entry in errors_dataset]
-    min_steps = min(arr.shape[0] for arr in state_errors_list)
-    state_errors = np.stack([arr[:min_steps, :num_states] for arr in state_errors_list], axis=0)
-    times = first_traj.times[:min_steps]
+    state_errors_list = [entry.trajectory.states[:, :num_states] for entry in errors_dataset]
+    max_steps = max(arr.shape[0] for arr in state_errors_list)
+    state_errors = np.stack([
+        np.pad(arr, ((0, max_steps - len(arr)), (0, 0)), constant_values=np.nan)
+        for arr in state_errors_list
+    ])
+
+    try:
+        dt = errors_dataset.global_config.dt
+    except Exception:
+        dt = getattr(errors_dataset[0].config, "dt", 0.1)
+    times = np.arange(max_steps) * dt
 
     # Collect control error trajectories if requested
     if plot_controls and num_controls > 0:
-        ctrl_errors_list = [entry.trajectory.inputs for entry in errors_dataset if entry.trajectory.inputs is not None]
+        ctrl_errors_list = [entry.trajectory.inputs[:, :num_controls] for entry in errors_dataset if entry.trajectory.inputs is not None]
         if ctrl_errors_list:
-            min_ctrl_steps = min(arr.shape[0] for arr in ctrl_errors_list)
-            ctrl_errors = np.stack([arr[:min_ctrl_steps, :num_controls] for arr in ctrl_errors_list], axis=0)
-            ctrl_times = times[:min_ctrl_steps]
+            max_ctrl_steps = max(arr.shape[0] for arr in ctrl_errors_list)
+            ctrl_errors = np.stack([
+                np.pad(arr, ((0, max_ctrl_steps - len(arr)), (0, 0)), constant_values=np.nan)
+                for arr in ctrl_errors_list
+            ])
+            ctrl_times = times[:max_ctrl_steps]
         else:
             plot_controls = False
             num_plots = num_states

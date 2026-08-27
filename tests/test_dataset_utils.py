@@ -48,17 +48,19 @@ class TestDatasetUtils(unittest.TestCase):
         entry_id: int,
         decay_factor: float = 0.9,
         input_gain: float = -0.5,
+        T_sim: int | None = None,
     ) -> MPCData:
         """Helper to create a synthetic MPCData rollout from initial state x0."""
-        states = np.zeros((self.T_sim + 1, self.nx), dtype=np.float64)
-        inputs = np.zeros((self.T_sim, self.nu), dtype=np.float64)
-        times = np.arange(self.T_sim + 1) * self.dt
-        V_solver = np.zeros(self.T_sim, dtype=np.float64)
+        t_sim = T_sim if T_sim is not None else self.T_sim
+        states = np.zeros((t_sim + 1, self.nx), dtype=np.float64)
+        inputs = np.zeros((t_sim, self.nu), dtype=np.float64)
+        times = np.arange(t_sim + 1) * self.dt
+        V_solver = np.zeros(t_sim, dtype=np.float64)
 
         x_curr = np.asarray(x0, dtype=np.float64).copy()
         states[0] = x_curr
 
-        for t in range(self.T_sim):
+        for t in range(t_sim):
             u_curr = np.array([input_gain * (x_curr[0] + x_curr[1])])
             inputs[t] = u_curr
             V_solver[t] = float(x_curr.T @ np.eye(self.nx) @ x_curr)
@@ -66,7 +68,7 @@ class TestDatasetUtils(unittest.TestCase):
             states[t + 1] = x_next
             x_curr = x_next
 
-        meta = MPCMeta(id=entry_id, steps_simulated=self.T_sim, feasible=True)
+        meta = MPCMeta(id=entry_id, steps_simulated=t_sim, feasible=True)
         traj = MPCTrajectory(
             states=states,
             inputs=inputs,
@@ -201,6 +203,9 @@ class TestDatasetUtils(unittest.TestCase):
             plot_controls=True,
         )
         self.assertIsNotNone(fig)
+        # Verify x axis values use dt
+        expected_times = np.arange(self.T_sim + 1) * self.dt
+        np.testing.assert_allclose(fig.data[1].x, expected_times)
 
     def test_no_matching_initial_states(self) -> None:
         """Test create_error_dataset when no states match returns empty dataset."""
@@ -209,6 +214,42 @@ class TestDatasetUtils(unittest.TestCase):
 
         error_ds = create_error_dataset(ds_a, ds_b, atol=1e-6)
         self.assertEqual(len(error_ds), 0)
+
+    def test_trajectory_error_bands_unequal_lengths(self) -> None:
+        """Test that trajectory_error_bands handles varying trajectory lengths and pads with NaN."""
+        from mpc_datagen.plots.trajectories import trajectory_error_bands
+
+        # Entry 0 has T_sim=5 (6 state steps, 5 input steps)
+        # Entry 1 has T_sim=10 (11 state steps, 10 input steps)
+        entry_short = self._create_entry(np.array([1.0, 1.0]), entry_id=0, T_sim=5)
+        entry_long = self._create_entry(np.array([2.0, -1.0]), entry_id=1, T_sim=10)
+
+        ds = MPCDataset(data_buffer=[entry_short, entry_long])
+        fig = trajectory_error_bands(
+            errors_dataset=ds,
+            state_labels=["e_{x1}", "e_{x2}"],
+            control_labels=["e_u"],
+            plot_controls=True,
+            show_individual=True,
+        )
+        self.assertIsNotNone(fig)
+
+        # Expected max steps: states=11, inputs=10
+        expected_times = np.arange(11) * self.dt
+        expected_ctrl_times = np.arange(10) * self.dt
+
+        # Check state individual trace for short trajectory (trace 1)
+        trace_state_short = fig.data[1]
+        np.testing.assert_allclose(trace_state_short.x, expected_times)
+        self.assertEqual(len(trace_state_short.y), 11)
+        self.assertFalse(np.isnan(trace_state_short.y[:6]).any())
+        self.assertTrue(np.isnan(trace_state_short.y[6:]).all())
+
+        # Check state individual trace for long trajectory (trace 2)
+        trace_state_long = fig.data[2]
+        np.testing.assert_allclose(trace_state_long.x, expected_times)
+        self.assertEqual(len(trace_state_long.y), 11)
+        self.assertFalse(np.isnan(trace_state_long.y).any())
 
 
 if __name__ == "__main__":
