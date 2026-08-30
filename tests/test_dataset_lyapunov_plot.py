@@ -246,6 +246,32 @@ class TestDatasetLyapunovPlot(PlotAssertionsMixin):
         )
         self.assertIsNotNone(fig_traj)
 
+        # Test passing multiple datasets (*dataset)
+        fig_multi = plots.mpc_trajectories(
+            self.dataset,
+            self.dataset,
+            state_labels=["x_1", "x_2"],
+            control_labels=["u_1"],
+        )
+        self.assertIsNotNone(fig_multi)
+
+        # Test passing dataset_labels
+        from mpc_datagen.plots.utils import COLORS
+        fig_labeled = plots.mpc_trajectories(
+            self.dataset,
+            self.dataset,
+            dataset_labels=["MPC Expert", "NN Policy"],
+            state_labels=["x_1", "x_2"],
+            control_labels=["u_1"],
+        )
+        self.assertIsNotNone(fig_labeled)
+        traces_expert = [t for t in fig_labeled.data if t.name and "MPC Expert" in t.name]
+        traces_nn = [t for t in fig_labeled.data if t.name and "NN Policy" in t.name]
+        self.assertTrue(len(traces_expert) > 0)
+        self.assertTrue(len(traces_nn) > 0)
+        self.assertEqual(traces_expert[0].line.color, COLORS[0])
+        self.assertEqual(traces_nn[0].line.color, COLORS[1])
+
     def test_trajectory_error_bands(self) -> None:
         """Test trajectory error bands plotting."""
         fig_err = plots.trajectory_error_bands(

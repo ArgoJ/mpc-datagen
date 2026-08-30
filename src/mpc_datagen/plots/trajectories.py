@@ -12,23 +12,28 @@ __logger__ = logging.getLogger(__name__)
 
 
 def mpc_trajectories(
-    dataset: MPCDataset,
-    state_labels: list[str],
-    control_labels: list[str],
+    *dataset: MPCDataset,
+    dataset_labels: list[str] | None = None,
+    state_labels: list[str] | None = None,
+    control_labels: list[str] | None = None,
     plot_predictions: bool = False,
     time_bound: float | None = None,
     html_path: Path | str | None = None,
+    **kwargs,
 ) -> go.Figure | None:
     """Plot MPC trajectories for states and controls using Plotly.
 
     Parameters
     ----------
-    dataset : MPCDataset
-        The dataset containing trajectories to plot.
-    state_labels : list[str]
-        List of labels for each state variable.
-    control_labels : list[str]
-        List of labels for each control variable.
+    *dataset : MPCDataset
+        One or more datasets containing trajectories to plot. If multiple datasets
+        are provided, each dataset is assigned its own color.
+    dataset_labels : list[str], optional
+        List of labels for each dataset. If provided, used for trace names and legend.
+    state_labels : list[str], optional
+        List of labels for each state variable. Defaults to ["$x_1$", "$x_2$", ...].
+    control_labels : list[str], optional
+        List of labels for each control variable. Defaults to ["$u_1$", "$u_2$", ...].
     plot_predictions : bool, optional
         If True, plot the OCP predictions at each step. Default is False.
     time_bound : float, optional
@@ -41,14 +46,28 @@ def mpc_trajectories(
     go.Figure | None
         Plotly Figure object if html_path is None, else None.
     """
-    if len(dataset) == 0:
+    datasets = [d for d in dataset if isinstance(d, MPCDataset)]
+    if not datasets and "dataset" in kwargs and isinstance(kwargs["dataset"], MPCDataset):
+        datasets = [kwargs["dataset"]]
+
+    trajs = [
+        (d_idx, run_idx, entry.trajectory)
+        for d_idx, ds in enumerate(datasets)
+        for run_idx, entry in enumerate(ds)
+    ]
+    if not trajs:
         __logger__.warning("Dataset is empty.")
         return None
 
-    # Extract dimensions from the first trajectory
-    first_traj = dataset[0].trajectory
+    multi = len(datasets) > 1
+    first_traj = trajs[0][2]
     num_states = first_traj.states.shape[1]
     num_controls = first_traj.inputs.shape[1]
+
+    if state_labels is None:
+        state_labels = [f"$x_{{{i+1}}}$" for i in range(num_states)]
+    if control_labels is None:
+        control_labels = [f"$u_{{{i+1}}}$" for i in range(num_controls)]
 
     # Create subplots
     fig = make_subplots(
@@ -69,9 +88,13 @@ def mpc_trajectories(
     # Plot states
     for i in range(num_states):
         row = i + 1
-        for idx in range(len(dataset)):
-            traj = dataset[idx].trajectory
-            color = COLORS[idx % len(COLORS)]
+        for d_idx, run_idx, traj in trajs:
+            color = COLORS[(d_idx if multi else run_idx) % len(COLORS)]
+            if multi:
+                name = dataset_labels[d_idx] if dataset_labels and d_idx < len(dataset_labels) else f"Dataset ${d_idx+1}$"
+            else:
+                name = f"{dataset_labels[0]} - Run ${run_idx+1}$" if dataset_labels else f"Run ${run_idx+1}$"
+            showlegend = (i == 0 and (run_idx == 0 if multi else True))
 
             # Main Trajectory
             fig.add_trace(
@@ -79,10 +102,10 @@ def mpc_trajectories(
                     x=traj.times,
                     y=traj.states[:, i],
                     mode="lines",
-                    name=_to_latex(f"Run ${idx+1}$"),
+                    name=_to_latex(name),
                     line=dict(color=color),
-                    legendgroup=_to_latex(f"Run ${idx+1}$"),
-                    showlegend=(i == 0),
+                    legendgroup=_to_latex(name),
+                    showlegend=showlegend,
                 ),
                 row=row,
                 col=1,
@@ -120,7 +143,7 @@ def mpc_trajectories(
                         line=dict(color=color, width=1),
                         opacity=0.3,
                         showlegend=False,
-                        legendgroup=f"Run {idx+1}",
+                        legendgroup=_to_latex(name),
                         hoverinfo="skip",
                     ),
                     row=row,
@@ -132,9 +155,12 @@ def mpc_trajectories(
     for i in range(num_controls):
         plot_idx = num_states + i
         row = plot_idx + 1
-        for idx in range(len(dataset)):
-            traj = dataset[idx].trajectory
-            color = COLORS[idx % len(COLORS)]
+        for d_idx, run_idx, traj in trajs:
+            color = COLORS[(d_idx if multi else run_idx) % len(COLORS)]
+            if multi:
+                name = dataset_labels[d_idx] if dataset_labels and d_idx < len(dataset_labels) else f"Dataset ${d_idx+1}$"
+            else:
+                name = f"{dataset_labels[0]} - Run ${run_idx+1}$" if dataset_labels else f"Run ${run_idx+1}$"
 
             # Controls (Step plot)
             fig.add_trace(
@@ -143,8 +169,8 @@ def mpc_trajectories(
                     y=traj.inputs[:, i],
                     mode="lines",
                     line=dict(color=color, shape="hv"),  # "hv" for step-after behavior
-                    name=_to_latex(f"Run ${idx+1}$ - {control_labels[i]}"),
-                    legendgroup=_to_latex(f"Run ${idx+1}$"),
+                    name=_to_latex(f"{name} - {control_labels[i]}"),
+                    legendgroup=_to_latex(name),
                     showlegend=False,
                 ),
                 row=row,
@@ -182,7 +208,7 @@ def mpc_trajectories(
                         line=dict(color=color, width=1, shape="hv"),
                         opacity=0.3,
                         showlegend=False,
-                        legendgroup=_to_latex(f"Run ${idx+1}$"),
+                        legendgroup=_to_latex(name),
                         hoverinfo="skip",
                     ),
                     row=row,
