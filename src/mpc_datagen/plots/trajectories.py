@@ -263,16 +263,16 @@ def trajectory_error_bands(
     html_path: Path | str | None = None,
     tikz: bool = True,
 ) -> go.Figure | None:
-    """Plot error bands (min, max, mean, median) for a dataset of trajectory errors per state.
+    """Plot absolute error bands (min, max, mean, median) for a dataset of trajectory errors per state.
 
     Parameters
     ----------
     errors_dataset : MPCDataset
         The dataset containing trajectory errors (e.g. diff between NN rollout and MPC expert).
     state_labels : list[str], optional
-        Labels for each state error dimension. Defaults to ["$\\Delta x_1$", "$\\Delta x_2$", ...].
+        Labels for each state error dimension. Defaults to ["$|\\Delta x_1|$", "$|\\Delta x_2|$", ...].
     control_labels : list[str], optional
-        Labels for each control error dimension. Defaults to ["$\\Delta u_1$", "$\\Delta u_2$", ...] if plot_controls is True.
+        Labels for each control error dimension. Defaults to ["$|\\Delta u_1|$", "$|\\Delta u_2|$", ...] if plot_controls is True.
     plot_controls : bool, optional
         If True, also plots error bands for control input errors. Default is False.
     show_individual : bool, optional
@@ -301,14 +301,14 @@ def trajectory_error_bands(
     num_controls = first_traj.inputs.shape[1] if first_traj.inputs is not None and first_traj.inputs.ndim == 2 else 0
 
     if state_labels is None:
-        state_labels = [f"$\\Delta x_{{{i+1}}}$" for i in range(num_states)]
+        state_labels = [f"$|\\Delta x_{{{i+1}}}|$" for i in range(num_states)]
     if control_labels is None and num_controls > 0:
-        control_labels = [f"$\\Delta u_{{{i+1}}}$" for i in range(num_controls)]
+        control_labels = [f"$|\\Delta u_{{{i+1}}}|$" for i in range(num_controls)]
 
     num_plots = num_states + (num_controls if plot_controls and num_controls > 0 else 0)
 
-    # Collect state error trajectories: (M, T_state, num_states)
-    state_errors_list = [entry.trajectory.states[:, :num_states] for entry in errors_dataset]
+    # Collect state error trajectories (absolute error): (M, T_state, num_states)
+    state_errors_list = [np.abs(entry.trajectory.states[:, :num_states]) for entry in errors_dataset]
     max_steps = max(arr.shape[0] for arr in state_errors_list)
     state_errors = np.stack([
         np.pad(arr, ((0, max_steps - len(arr)), (0, 0)), constant_values=np.nan)
@@ -321,9 +321,13 @@ def trajectory_error_bands(
         dt = getattr(errors_dataset[0].config, "dt", 0.1)
     times = np.arange(max_steps) * dt
 
-    # Collect control error trajectories if requested
+    # Collect control error trajectories if requested (absolute error)
     if plot_controls and num_controls > 0:
-        ctrl_errors_list = [entry.trajectory.inputs[:, :num_controls] for entry in errors_dataset if entry.trajectory.inputs is not None]
+        ctrl_errors_list = [
+            np.abs(entry.trajectory.inputs[:, :num_controls])
+            for entry in errors_dataset
+            if entry.trajectory.inputs is not None
+        ]
         if ctrl_errors_list:
             max_ctrl_steps = max(arr.shape[0] for arr in ctrl_errors_list)
             ctrl_errors = np.stack([
